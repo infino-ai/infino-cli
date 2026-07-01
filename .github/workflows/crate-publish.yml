@@ -1,0 +1,95 @@
+name: Publish crate
+
+# Publishes `infino-cli` to crates.io (enabling `cargo install infino-cli`).
+# Runs alongside the cargo-dist `release.yml` (which ships the shell / npm /
+# Homebrew binaries): both fire on a `v*` tag; this one handles crates.io.
+#
+# Two ways to run:
+#   - Push a `v<version>` tag (e.g. `v0.1.1`) to publish for real. The job
+#     asserts the tag matches the version in Cargo.toml before uploading.
+#   - Run manually (workflow_dispatch): defaults to a DRY RUN (package +
+#     verify-build, upload nothing). Uncheck `dry_run` to publish without a tag
+#     — use this once to publish the already-tagged v0.1.0.
+#
+# Needs the CARGO_REGISTRY_TOKEN secret (a crates.io token with publish rights).
+# The first publish claims the `infino-cli` name.
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate only — package + verify-build, publish nothing"
+        type: boolean
+        default: true
+
+# One publish at a time; never cancel one in flight.
+concurrency:
+  group: publish-crate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Transitive deprecation warnings must not fail a release build.
+  RUSTFLAGS: ""
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      # The datafusion + arrow dep graph (pulled transitively via `infino`) plus
+      # the verify build overflows the stock runner's free space; reclaim ~30 GB.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # A recent stable toolchain (edition 2024 / rust-version 1.95).
+      - name: Install stable toolchain
+        run: rustup update stable && rustup default stable
+
+      # Restore the dep graph so the verify build mostly relinks.
+      - uses: Swatinem/rust-cache@v2
+
+      # Resolve the version from Cargo.toml and, on a tag push, assert the tag
+      # matches it (`v0.1.1` -> `0.1.1`). Guards against tag/version drift.
+      - name: Resolve & check version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "infino-cli") | .version')"
+          echo "Cargo.toml version: $version"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::tag v$tag does not match Cargo.toml version $version"
+              exit 1
+            fi
+          fi
+
+      # The gate: package the crate and compile it from the extracted tarball,
+      # exactly as crates.io will. `--locked` keeps the committed Cargo.lock
+      # authoritative.
+      - name: Verify (cargo publish --dry-run)
+        run: cargo publish --dry-run --locked
+
+      # Real publish: a tag push, or a manual run with dry_run unchecked. The
+      # token is injected only here.
+      - name: Publish to crates.io
+        if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
