@@ -10,7 +10,7 @@ installer, a Homebrew formula, and an npm package, released on standard
 
 1. **Install dist:** `cargo install cargo-dist` (or the shell installer).
 2. **Create the Homebrew tap repo:** `infino-ai/homebrew-tap` (public). `dist`
-   pushes the generated formula there → `brew install infino-ai/tap/infino`.
+   pushes the generated formula there → `brew install infino-ai/tap/infino-cli`.
 3. **Generate CI:** run `dist init` at the repo root. It validates
    `dist-workspace.toml`, pins the dist version, and **generates the release
    workflow** (`.github/workflows/release.yml`). Commit what it writes — do not
@@ -39,7 +39,7 @@ The CLI versions independently of the engine; bump `infino = "…"` in
 ## Channels
 
 - **shell:** `curl --proto '=https' --tlsv1.2 -LsSf <release-url>/installer.sh | sh`
-- **Homebrew:** `brew install infino-ai/tap/infino`
+- **Homebrew:** `brew install infino-ai/tap/infino-cli`
 - **npm:** `npx @infino-ai/infino-cli` (binary: `infino`)
 
 (Not published to crates.io — `dist` ships shell + npm + Homebrew. Add a
