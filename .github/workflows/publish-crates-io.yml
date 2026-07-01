@@ -1,0 +1,41 @@
+name: Publish to crates.io
+
+# cargo-dist custom publish job. It is invoked by the dist-generated
+# `release.yml` during the publish phase (referenced as `./publish-crates-io`
+# in `dist-workspace.toml`'s `publish-jobs`), so one `v*` tag ships every
+# channel — crates.io here, npm + Homebrew + shell via dist — in a single
+# coordinated release. dist calls this with `secrets: inherit`, so
+# `CARGO_REGISTRY_TOKEN` (a crates.io publish token, set as a repo secret) is
+# available.
+#
+# `--no-verify`: dist already built and released the binaries this run, and the
+# packaged tarball is validated separately, so we skip re-compiling the whole
+# datafusion graph here.
+
+on:
+  workflow_call:
+    # dist passes its manifest as `plan`; required by the custom-job contract.
+    inputs:
+      plan:
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: ""
+
+jobs:
+  crates-io:
+    name: Publish infino-cli to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        run: rustup update stable && rustup default stable
+
+      - name: Publish
+        run: cargo publish --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
