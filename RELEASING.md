@@ -41,9 +41,10 @@ The CLI versions independently of the engine; bump `infino = "…"` in
 - **shell:** `curl --proto '=https' --tlsv1.2 -LsSf <release-url>/installer.sh | sh`
 - **Homebrew:** `brew install infino-ai/tap/infino-cli`
 - **npm:** `npx @infino-ai/infino-cli` (binary: `infino`)
+- **cargo:** `cargo install infino-cli`
 
-(Not published to crates.io — `dist` ships shell + npm + Homebrew. Add a
-`cargo publish` step later if a `cargo install infino-cli` channel is wanted.)
+All four ship from one tag: crates.io via the `./publish-crates-io` custom job
+(`CARGO_REGISTRY_TOKEN`), the rest via `dist`.
 
 ## Agent skills
 

@@ -17,9 +17,12 @@ npm install -g @infino-ai/infino-cli     # or: npx @infino-ai/infino-cli
 # shell installer
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/infino-ai/infino-cli/releases/latest/download/infino-cli-installer.sh | sh
+
+# cargo
+cargo install infino-cli
 ```
 
-All install the `infino` binary. (Build from source: `cargo build --release`.)
+All install the `infino` binary. (Or build from source: `cargo build --release`.)
 
 ## Quickstart
 
