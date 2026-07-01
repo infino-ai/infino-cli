@@ -7,6 +7,13 @@ rust-version = "1.95"
 license = "Apache-2.0"
 description = "Command-line interface for infino: SQL, full-text, and vector search over object storage."
 repository = "https://github.com/infino-ai/infino-cli"
+homepage = "https://github.com/infino-ai/infino-cli"
+readme = "README.md"
+keywords = ["cli", "search", "vector-search", "full-text", "rag"]
+categories = ["command-line-utilities", "database"]
+# Keep the published crate lean — release/CI files aren't needed to build it.
+# (skills/ IS kept: the binary embeds it via include_str!.)
+exclude = [".github/", "RELEASING.md", "dist-workspace.toml"]
 
 # Crate `infino-cli`, binary `infino`.
 [[bin]]
