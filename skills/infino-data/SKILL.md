@@ -1,6 +1,6 @@
 ---
 name: infino-data
-description: Use this skill when the user wants to create an infino table or change its data from the terminal — create-table, ingest, update, delete, optimize. Covers schema definition, indexes, and row loading.
+description: Use this skill when the user wants to create an infino table or change its data from the terminal — create-table, ingest, update, delete, optimize, gc. Covers schema definition, indexes, and row loading.
 version: 0.1.0
 ---
 
@@ -48,6 +48,16 @@ matched rows with the values in `--set-file` (Parquet or NDJSON).
 ```
 infino optimize docs --uri <uri> [--max-memory-mb N] [--min-fill-percent P] \
     [--target-superfile-size-mb S]
+```
+
+## Reclaim storage (gc)
+
+Delete orphaned objects left by compaction or interrupted writes. Requires
+durable storage. `--older-than-secs` is a safety window (default `0`) so a
+concurrent reader or writer is never raced.
+
+```
+infino gc docs --uri <uri> [--older-than-secs N]
 ```
 
 See [references/SCHEMA.md](references/SCHEMA.md) for the YAML schema format and

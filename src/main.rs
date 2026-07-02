@@ -11,17 +11,19 @@ mod schema;
 mod search;
 mod skills;
 
-use std::{io::stderr, path::PathBuf};
+use std::{io::stderr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use infino::{CompactionSettings, Connection, MutationStats, OptimizeOptions, Supertable, connect};
+use infino::{
+    CompactionSettings, Connection, GcReport, MutationStats, OptimizeOptions, Supertable, connect,
+};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
     data::Format,
     output::{OutputFormat, render},
-    search::{Bm25Args, ExactMatchArgs, TokenMatchArgs, VectorArgs},
+    search::{Bm25Args, CountArgs, ExactMatchArgs, HybridArgs, TokenMatchArgs, VectorArgs},
     skills::SkillsCommand,
 };
 
@@ -66,10 +68,14 @@ enum Command {
     Bm25Search(Bm25Args),
     /// Vector similarity (kNN) search.
     VectorSearch(VectorArgs),
+    /// Hybrid BM25 + vector search, fused with reciprocal-rank fusion.
+    HybridSearch(HybridArgs),
     /// Unranked token match over an FTS column.
     TokenMatch(TokenMatchArgs),
     /// Unranked exact-value match.
     ExactMatch(ExactMatchArgs),
+    /// Count rows matching a keyword query, without fetching them.
+    Count(CountArgs),
     /// Create a table and load its initial rows (a table is not durable until
     /// its first commit). Schema + data come from a Parquet file
     /// (`--from-parquet`), or from a YAML schema (`--schema`) plus `--file`.
@@ -127,6 +133,16 @@ enum Command {
         /// SQL predicate selecting rows to delete.
         #[arg(long = "where", value_name = "PREDICATE")]
         predicate: String,
+    },
+    /// Reclaim orphaned storage objects left by compaction or interrupted
+    /// writes. Requires durable storage.
+    Gc {
+        /// Table name.
+        table: String,
+        /// Only delete objects older than this many seconds — a safety window
+        /// against racing readers or writers.
+        #[arg(long, default_value_t = 0.0)]
+        older_than_secs: f64,
     },
     /// Compact a table.
     Optimize {
@@ -192,6 +208,10 @@ fn run(cli: Cli) -> Result<()> {
             let table = open_table(&cli.uri, &args.table)?;
             render(cli.output, &search::vector(&table, &args)?)?;
         }
+        Command::HybridSearch(args) => {
+            let table = open_table(&cli.uri, &args.table)?;
+            render(cli.output, &search::hybrid(&table, &args)?)?;
+        }
         Command::TokenMatch(args) => {
             let table = open_table(&cli.uri, &args.table)?;
             render(cli.output, &search::token_match(&table, &args)?)?;
@@ -199,6 +219,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::ExactMatch(args) => {
             let table = open_table(&cli.uri, &args.table)?;
             render(cli.output, &search::exact_match(&table, &args)?)?;
+        }
+        Command::Count(args) => {
+            let table = open_table(&cli.uri, &args.table)?;
+            println!("{}", search::count(&table, &args)?);
         }
         Command::CreateTable {
             name,
@@ -281,6 +305,16 @@ fn run(cli: Cli) -> Result<()> {
                 .with_context(|| format!("deleting from `{table}`"))?;
             print_stats(&stats);
         }
+        Command::Gc {
+            table,
+            older_than_secs,
+        } => {
+            let handle = open_table(&cli.uri, &table)?;
+            let report = handle
+                .gc(Duration::from_secs_f64(older_than_secs.max(0.0)))
+                .with_context(|| format!("gc on `{table}`"))?;
+            print_gc(&report);
+        }
         Command::Optimize {
             table,
             max_memory_mb,
@@ -330,5 +364,17 @@ fn print_stats(stats: &MutationStats) {
         stats.matched(),
         stats.n_tombstoned(),
         stats.n_not_found()
+    );
+}
+
+/// Print the counts a gc sweep reported.
+fn print_gc(report: &GcReport) {
+    println!(
+        "deleted {} objects, freed {} bytes (skipped {} live, {} too new, {} errors)",
+        report.objects_deleted,
+        report.bytes_freed,
+        report.objects_skipped_live,
+        report.objects_skipped_too_new,
+        report.delete_errors,
     );
 }
