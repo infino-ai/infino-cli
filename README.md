@@ -50,11 +50,14 @@ infino query "SELECT id, body FROM docs LIMIT 10" --uri file://./data --output j
 | `ingest` | Append rows from Parquet or NDJSON (file or stdin) |
 | `bm25-search` | Ranked keyword (BM25) search |
 | `vector-search` | Vector similarity (kNN) search — bring your own query vector |
+| `hybrid-search` | Hybrid BM25 + vector search, fused with reciprocal-rank fusion |
 | `token-match` / `exact-match` | Unranked token / exact-value match |
+| `count` | Count rows matching a keyword query, without fetching them |
 | `query` | Run SQL (incl. the `bm25_search()` / `vector_search()` table functions) |
 | `tables` / `describe` | List tables / show a table's schema |
 | `update` / `delete` | Change rows matching a `--where` SQL predicate |
 | `optimize` | Compact a table |
+| `gc` | Reclaim orphaned storage objects (maintenance; requires durable storage) |
 | `skills install` | Install the bundled agent skills for Claude Code / Cursor |
 
 Run `infino <command> --help` for full flags. Output format is `--output

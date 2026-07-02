@@ -1,5 +1,6 @@
 //! Search commands — one per public search method, mirroring the Node/Python
-//! SDK surface: `bm25-search`, `vector-search`, `token-match`, `exact-match`.
+//! SDK surface: `bm25-search`, `vector-search`, `hybrid-search`, `token-match`,
+//! `exact-match`, and `count`.
 
 use std::{
     fs::read_to_string,
@@ -84,6 +85,51 @@ pub struct VectorArgs {
     pub filter_mode: Mode,
 }
 
+/// `hybridSearch(textColumn, textQuery, vectorColumn, vectorQuery, k, mode, nprobe)`.
+#[derive(Args)]
+pub struct HybridArgs {
+    /// Table name.
+    pub table: String,
+    /// FTS-indexed text column (BM25 side).
+    pub text_column: String,
+    /// Query text for the BM25 side.
+    pub text_query: String,
+    /// Vector-indexed column (vector side).
+    pub vector_column: String,
+    /// Query vector: a file holding a JSON array of numbers, or `-` for stdin.
+    #[arg(long)]
+    pub vector_file: PathBuf,
+    /// Number of results.
+    #[arg(short = 'k', long, default_value_t = DEFAULT_K)]
+    pub k: usize,
+    /// Boolean mode for the BM25 side.
+    #[arg(long, value_enum, default_value = "or")]
+    pub mode: Mode,
+    /// IVF probe count on the vector side (higher = more recall, slower).
+    #[arg(long)]
+    pub nprobe: Option<usize>,
+    /// Rerank multiplier on the vector side.
+    #[arg(long)]
+    pub rerank_mult: Option<usize>,
+    /// Columns to return, comma-separated (default: id + score).
+    #[arg(long, value_delimiter = ',')]
+    pub fields: Option<Vec<String>>,
+}
+
+/// `count(column, query, mode)`.
+#[derive(Args)]
+pub struct CountArgs {
+    /// Table name.
+    pub table: String,
+    /// FTS-indexed column to search.
+    pub column: String,
+    /// Query text.
+    pub query: String,
+    /// Boolean mode for multi-term queries.
+    #[arg(long, value_enum, default_value = "or")]
+    pub mode: Mode,
+}
+
 /// `tokenMatch(column, query, mode, projection)`.
 #[derive(Args)]
 pub struct TokenMatchArgs {
@@ -152,6 +198,32 @@ pub fn vector(table: &Supertable, args: &VectorArgs) -> Result<Vec<RecordBatch>>
         filter,
         fields.as_deref(),
     )?)
+}
+
+pub fn hybrid(table: &Supertable, args: &HybridArgs) -> Result<Vec<RecordBatch>> {
+    let query = read_vector(&args.vector_file)?;
+    let mut options = VectorSearchOptions::new();
+    if let Some(nprobe) = args.nprobe {
+        options = options.with_nprobe(nprobe);
+    }
+    if let Some(rerank_mult) = args.rerank_mult {
+        options = options.with_rerank_mult(rerank_mult);
+    }
+    let fields = projection(&args.fields);
+    Ok(table.hybrid_search(
+        &args.text_column,
+        &args.text_query,
+        args.mode.into(),
+        &args.vector_column,
+        &query,
+        options,
+        args.k,
+        fields.as_deref(),
+    )?)
+}
+
+pub fn count(table: &Supertable, args: &CountArgs) -> Result<u64> {
+    Ok(table.count(&args.column, &args.query, args.mode.into())?)
 }
 
 pub fn token_match(table: &Supertable, args: &TokenMatchArgs) -> Result<Vec<RecordBatch>> {

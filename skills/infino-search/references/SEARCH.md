@@ -6,9 +6,14 @@
   default search for "find documents about X".
 - **vector-search** — nearest-neighbour over a vector column; for semantic
   similarity. Needs a precomputed query vector.
+- **hybrid-search** — runs BM25 and vector kNN together and fuses the rankings
+  with reciprocal-rank fusion; best when a query has both keyword and semantic
+  intent. Needs both an FTS column and a vector column, plus a query vector.
 - **token-match** — every row whose column matches the query tokens, unranked
   (`score` = 0). Useful for filtering, not ranking.
 - **exact-match** — rows whose column equals a value exactly.
+- **count** — how many rows match a keyword query, without fetching them; prints
+  a single number. Cheaper than a search when you only need the tally.
 - **query** — arbitrary SQL; can call `bm25_search(...)` / `vector_search(...)`
   as table functions and join/filter the results.
 
@@ -30,6 +35,28 @@
   predicate first: `--filter-column <fts_col> --filter-query "<text>"
   [--filter-mode or|and]`. All three filter flags work together; the filter
   column must be full-text indexed.
+
+## Hybrid search
+
+Positional args are `<table> <text_column> <text_query> <vector_column>`, then
+`--vector-file <path>` for the query vector:
+
+```
+infino hybrid-search docs body "cancel subscription" embedding \
+  --vector-file query.json -k 5 --uri file://./data
+```
+
+`--mode or|and` applies to the BM25 side; `--nprobe` / `--rerank-mult` tune the
+vector side. Both indexes must exist on the table.
+
+## Counting
+
+`count <table> <column> <query> [--mode or|and]` prints how many rows match,
+without fetching them:
+
+```
+infino count docs body "cancel subscription" --uri file://./data
+```
 
 ## Notes
 
