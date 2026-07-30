@@ -16,6 +16,11 @@ ci = "github"
 # one and undrafts it. The workflow's `on:` trigger is hand-edited to fire on a
 # published Release (see the HAND-EDITED note in release.yml).
 create-release = false
+# The `on:` trigger in release.yml is hand-edited (dist has no config for a
+# release-published trigger), so tell dist not to regenerate or consistency-check
+# the CI file — otherwise every release run aborts with "release.yml has out of
+# date contents". This also stops `dist generate` from clobbering the hand-edit.
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell", "npm", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
