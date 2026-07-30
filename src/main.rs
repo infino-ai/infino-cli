@@ -16,7 +16,8 @@ use std::{io::stderr, path::PathBuf, time::Duration};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use infino::{
-    CompactionSettings, Connection, GcReport, MutationStats, OptimizeOptions, Supertable, connect,
+    CompactionSettings, ConnectOptions, Connection, GcReport, MutationStats, OptimizeOptions,
+    Supertable, connect_with,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -41,6 +42,15 @@ struct Cli {
     /// or `az://<container>/<prefix>`. May also be set via `INFINO_URI`.
     #[arg(long, global = true, env = "INFINO_URI")]
     uri: Option<String>,
+
+    /// Storage credential/config as `KEY=VALUE` (repeatable). Keys are
+    /// object_store's config strings (`aws_access_key_id`,
+    /// `aws_secret_access_key`, `aws_region`, `aws_endpoint`, `aws_allow_http`,
+    /// `azure_storage_account_name`, `google_service_account`, …). This mirrors
+    /// the `storage_options` map on the Node and Python bindings. Omit for
+    /// local backends or ambient cloud identity (IAM role / managed identity).
+    #[arg(long = "storage-option", global = true, value_name = "KEY=VALUE")]
+    storage_option: Vec<String>,
 
     /// Output format for row-returning commands.
     #[arg(long, value_enum, global = true, default_value = "table")]
@@ -178,9 +188,10 @@ fn main() -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let opts = connect_options(&cli.storage_option)?;
     match cli.command {
         Command::Tables => {
-            let conn = open(&cli.uri)?;
+            let conn = open(&opts, &cli.uri)?;
             let names = conn.list_tables().context("failed to list tables")?;
             if names.is_empty() {
                 println!("(no tables)");
@@ -190,38 +201,38 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Describe { table } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             for field in handle.schema().fields() {
                 println!("{}\t{}", field.name(), field.data_type());
             }
         }
         Command::Query { sql } => {
-            let conn = open(&cli.uri)?;
+            let conn = open(&opts, &cli.uri)?;
             let batches = conn.query_sql(&sql).context("query failed")?;
             render(cli.output, &batches)?;
         }
         Command::Bm25Search(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             render(cli.output, &search::bm25(&table, &args)?)?;
         }
         Command::VectorSearch(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             render(cli.output, &search::vector(&table, &args)?)?;
         }
         Command::HybridSearch(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             render(cli.output, &search::hybrid(&table, &args)?)?;
         }
         Command::TokenMatch(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             render(cli.output, &search::token_match(&table, &args)?)?;
         }
         Command::ExactMatch(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             render(cli.output, &search::exact_match(&table, &args)?)?;
         }
         Command::Count(args) => {
-            let table = open_table(&cli.uri, &args.table)?;
+            let table = open_table(&opts, &cli.uri, &args.table)?;
             println!("{}", search::count(&table, &args)?);
         }
         Command::CreateTable {
@@ -233,7 +244,7 @@ fn run(cli: Cli) -> Result<()> {
             fts,
             vector,
         } => {
-            let conn = open(&cli.uri)?;
+            let conn = open(&opts, &cli.uri)?;
             let (table_schema, initial) = match (from_parquet, schema_path) {
                 (Some(parquet), None) => {
                     let schema = data::parquet_schema(&parquet)?;
@@ -271,7 +282,7 @@ fn run(cli: Cli) -> Result<()> {
             file,
             format,
         } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             let batches = data::read_rows(file.as_deref(), format, handle.schema())?;
             let mut rows = 0;
             for batch in &batches {
@@ -288,7 +299,7 @@ fn run(cli: Cli) -> Result<()> {
             set_file,
             set_format,
         } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             let expr = predicate::parse(&handle, &predicate)?;
             let rows = data::read_rows(Some(&set_file), set_format, handle.schema())?;
             let batch = data::concat(rows)?;
@@ -298,7 +309,7 @@ fn run(cli: Cli) -> Result<()> {
             print_stats(&stats);
         }
         Command::Delete { table, predicate } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             let expr = predicate::parse(&handle, &predicate)?;
             let stats = handle
                 .delete(expr)
@@ -309,7 +320,7 @@ fn run(cli: Cli) -> Result<()> {
             table,
             older_than_secs,
         } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             let report = handle
                 .gc(Duration::from_secs_f64(older_than_secs.max(0.0)))
                 .with_context(|| format!("gc on `{table}`"))?;
@@ -321,7 +332,7 @@ fn run(cli: Cli) -> Result<()> {
             min_fill_percent,
             target_superfile_size_mb,
         } => {
-            let handle = open_table(&cli.uri, &table)?;
+            let handle = open_table(&opts, &cli.uri, &table)?;
             let mut settings = CompactionSettings::default();
             if let Some(value) = max_memory_mb {
                 settings.max_memory_mb = value;
@@ -343,18 +354,39 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 /// Open a connection to the storage location, or explain how to provide one.
-fn open(uri: &Option<String>) -> Result<Connection> {
+fn open(opts: &ConnectOptions, uri: &Option<String>) -> Result<Connection> {
     let uri = uri
         .as_deref()
         .context("no storage location — pass --uri or set INFINO_URI (e.g. file://./data)")?;
-    connect(uri).with_context(|| format!("could not open storage at `{uri}`"))
+    connect_with(uri, opts.clone()).with_context(|| format!("could not open storage at `{uri}`"))
 }
 
 /// Open a table handle at the storage location.
-fn open_table(uri: &Option<String>, table: &str) -> Result<Supertable> {
-    open(uri)?
+fn open_table(opts: &ConnectOptions, uri: &Option<String>, table: &str) -> Result<Supertable> {
+    open(opts, uri)?
         .open_table(table)
         .with_context(|| format!("failed to open table `{table}`"))
+}
+
+/// Build [`ConnectOptions`] from the `--storage-option KEY=VALUE` flags.
+///
+/// This is the CLI's analog of the `storage_options` map on the Node
+/// (`connect(uri, { storageOptions })`) and Python
+/// (`connect(uri, storage_options=...)`) bindings: credentials, region, and
+/// endpoint are passed explicitly, keyed by `object_store`'s config strings
+/// (`aws_*` / `azure_*` / `google_*`). Like the engine and both bindings, the
+/// CLI reads no credentials from the environment; an omitted set uses the
+/// backend's ambient identity (IAM instance role / managed identity / ADC).
+/// An unknown or cross-backend key is rejected by the engine at `connect`.
+fn connect_options(overrides: &[String]) -> Result<ConnectOptions> {
+    let mut opts = ConnectOptions::new();
+    for kv in overrides {
+        let (key, value) = kv
+            .split_once('=')
+            .with_context(|| format!("--storage-option must be KEY=VALUE, got `{kv}`"))?;
+        opts = opts.with_storage_option(key.trim(), value);
+    }
+    Ok(opts)
 }
 
 /// Print the row counts a mutation reported.
@@ -377,4 +409,44 @@ fn print_gc(report: &GcReport) {
         report.objects_skipped_too_new,
         report.delete_errors,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_flags_yields_empty_options() {
+        // With no `--storage-option`, connect uses ambient identity — no
+        // storage options are set. `ConnectOptions` exposes no getter, so
+        // inspect its `Debug` form.
+        let opts = connect_options(&[]).expect("assemble");
+        assert!(
+            format!("{opts:?}").contains("storage_options: {}"),
+            "no flags should carry no storage options, got {opts:?}"
+        );
+    }
+
+    #[test]
+    fn storage_option_flag_requires_key_value() {
+        let err = connect_options(&["not-a-pair".to_string()])
+            .expect_err("malformed --storage-option should error");
+        assert!(err.to_string().contains("KEY=VALUE"));
+    }
+
+    #[test]
+    fn storage_option_flags_are_recorded() {
+        let opts = connect_options(&[
+            "aws_endpoint=http://h:9000".to_string(),
+            "aws_region=us-west-1".to_string(),
+        ])
+        .expect("assemble");
+        let dbg = format!("{opts:?}");
+        assert!(
+            dbg.contains("aws_endpoint")
+                && dbg.contains("http://h:9000")
+                && dbg.contains("us-west-1"),
+            "flag values should land in storage options, got {dbg}"
+        );
+    }
 }
