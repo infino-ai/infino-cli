@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Context, Result};
 use arrow::array::RecordBatch;
 use clap::{Args, ValueEnum};
-use infino::{BoolMode, Supertable, VectorFilter, VectorSearchOptions};
+use infino::{Bm25SearchOptions, BoolMode, Supertable, VectorFilter, VectorSearchOptions};
 
 /// Default number of results when `-k` is not given.
 const DEFAULT_K: usize = 10;
@@ -167,7 +167,7 @@ pub fn bm25(table: &Supertable, args: &Bm25Args) -> Result<Vec<RecordBatch>> {
         &args.column,
         &args.query,
         args.k,
-        args.mode.into(),
+        Bm25SearchOptions::new().with_mode(args.mode.into()),
         fields.as_deref(),
     )?)
 }

@@ -42,6 +42,51 @@ infino bm25-search docs body "object storage" -k 10 --uri file://./data
 infino query "SELECT id, body FROM docs LIMIT 10" --uri file://./data --output json
 ```
 
+## Cloud storage and credentials
+
+Credentials, region, and endpoint are passed with `--storage-option KEY=VALUE`
+(repeatable), keyed by [`object_store`](https://docs.rs/object_store)'s config
+strings. This is the CLI's equivalent of the `storage_options` map on the Node
+(`connect(uri, { storageOptions })`) and Python (`connect(uri,
+storage_options=...)`) bindings. As with the engine and the bindings, nothing
+is read from `AWS_*` / `AZURE_*` environment variables; omit the options to use
+ambient cloud identity (IAM instance role / managed identity / workload-identity
+ADC).
+
+Common S3 keys (the same keys work for S3-compatible services like MinIO, Ceph,
+and RustFS):
+
+| Key | Purpose |
+|---|---|
+| `aws_access_key_id` / `aws_secret_access_key` | Static credentials |
+| `aws_session_token` | Temporary-credential session token |
+| `aws_region` | Signing region |
+| `aws_endpoint` | Custom endpoint for a non-AWS S3 service |
+| `aws_allow_http` | Set `true` to permit a plain-HTTP endpoint |
+
+A custom `aws_endpoint` automatically switches to path-style addressing, which
+is what most S3-compatible servers expect.
+
+```sh
+infino tables --uri s3://my-bucket \
+  --storage-option aws_access_key_id=... \
+  --storage-option aws_secret_access_key=... \
+  --storage-option aws_region=us-east-1 \
+  --storage-option aws_endpoint=https://minio.internal:9000 \
+  --storage-option aws_allow_http=true
+```
+
+Azure uses `azure_storage_account_name` / `azure_storage_account_key`; GCS uses
+`google_service_account` (key-file path) or `google_service_account_key`
+(inline JSON). `file://` and `memory://` need no credentials.
+
+To see the underlying storage requests when a connection misbehaves, set
+`RUST_LOG`:
+
+```sh
+RUST_LOG=debug,object_store=trace infino tables --uri s3://my-bucket
+```
+
 ## Commands
 
 | Command | What it does |
