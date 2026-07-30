@@ -24,14 +24,20 @@ installer, a Homebrew formula, and an npm package, released on standard
 
 ## Cutting a release
 
-1. Bump `version` in `Cargo.toml`.
-2. Tag and push:
-   ```
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-3. The `dist` workflow builds every target, creates the GitHub Release with
-   checksummed artifacts, and publishes the Homebrew formula + npm package.
+Releases are triggered manually from the Actions tab, not by pushing a tag
+(`dispatch-releases = true` in `dist-workspace.toml`).
+
+1. Bump `version` in `Cargo.toml` and merge it to `main`.
+2. In the repo, open **Actions → Release → Run workflow**. Pick the branch to
+   release from (usually `main`) and enter the tag in the **Release Tag** input
+   (for example `v0.2.2`). Leave the default `dry-run` to only plan and build —
+   nothing is tagged or published.
+3. `dist` creates the `vX.Y.Z` tag on that commit, builds every target, creates
+   the GitHub Release with checksummed artifacts, and publishes the Homebrew
+   formula + npm package + crates.io.
+
+Because the tag is created by the workflow, you no longer tag by hand — and a
+tag pushed with `git` will **not** start a release.
 
 The CLI versions independently of the engine; bump `infino = "…"` in
 `Cargo.toml` when adopting a newer engine release.

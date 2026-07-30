@@ -11,6 +11,9 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# Trigger releases manually from the Actions tab (workflow_dispatch) rather than
+# on tag push. `dist generate` regenerates the workflow; do not hand-edit it.
+dispatch-releases = true
 # The installers to generate for each app
 installers = ["shell", "npm", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
