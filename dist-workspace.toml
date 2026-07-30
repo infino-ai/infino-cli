@@ -11,9 +11,11 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
-# Trigger releases manually from the Actions tab (workflow_dispatch) rather than
-# on tag push. `dist generate` regenerates the workflow; do not hand-edit it.
-dispatch-releases = true
+# A published GitHub Release (created in the UI) is what starts a release; dist
+# does not create the Release, it builds and uploads artifacts to the existing
+# one and undrafts it. The workflow's `on:` trigger is hand-edited to fire on a
+# published Release (see the HAND-EDITED note in release.yml).
+create-release = false
 # The installers to generate for each app
 installers = ["shell", "npm", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
