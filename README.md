@@ -28,7 +28,8 @@ All install the `infino` binary. (Or build from source: `cargo build --release`.
 
 Every command targets a storage location with `--uri` (or the `INFINO_URI`
 environment variable): `memory://`, `file://<path>`, `s3://<bucket>/<prefix>`,
-or `az://<container>/<prefix>`.
+`az://<container>/<prefix>`, `gs://<bucket>/<prefix>`, or a hosted
+`https://<host>/<database>`.
 
 ```sh
 # Create a table and load its first rows (schema from YAML, body full-text indexed)
@@ -87,6 +88,23 @@ To see the underlying storage requests when a connection misbehaves, set
 RUST_LOG=debug,object_store=trace infino tables --uri s3://my-bucket
 ```
 
+## Hosted service
+
+Connect to the Infino hosted service with an `https://<host>/<database>` URI and
+an API key (`--api-key`, or the `INFINO_API_KEY` environment variable). Every
+command works exactly as it does locally; only the `--uri` changes. Provision
+the database once with `create-database`:
+
+```sh
+export INFINO_API_KEY=sk-...
+infino create-database --uri https://<host>/<database>
+infino ingest docs --uri https://<host>/<database> --file rows.ndjson --format ndjson
+infino bm25-search docs body "object storage" -k 10 --uri https://<host>/<database>
+```
+
+Add `--validate` to any command to fail fast at connect on bad credentials or an
+unreachable endpoint, rather than on the first query.
+
 ## Commands
 
 | Command | What it does |
@@ -100,6 +118,7 @@ RUST_LOG=debug,object_store=trace infino tables --uri s3://my-bucket
 | `count` | Count rows matching a keyword query, without fetching them |
 | `query` | Run SQL (incl. the `bm25_search()` / `vector_search()` table functions) |
 | `tables` / `describe` | List tables / show a table's schema |
+| `create-database` | Provision a hosted database (no-op for local / object-storage backends) |
 | `update` / `delete` | Change rows matching a `--where` SQL predicate |
 | `optimize` | Compact a table |
 | `gc` | Reclaim orphaned storage objects (maintenance; requires durable storage) |

@@ -2,6 +2,22 @@
 
 All commands take `--uri` (or `INFINO_URI`). Examples use `file://./data`.
 
+## Connect to the hosted service
+
+The hosted service is just a different `--uri`; every command below works
+unchanged against it. Provision the database once, then use it:
+
+```
+export INFINO_API_KEY=sk-...
+infino create-database --uri https://<host>/<database>
+infino tables         --uri https://<host>/<database>
+```
+
+`--api-key <key>` is an alternative to the `INFINO_API_KEY` env var. Object
+storage instead of the hosted service? Point `--uri` at `s3://…`, `az://…`, or
+`gs://…` and pass credentials with `--storage-option KEY=VALUE` (repeatable,
+object_store config keys). Add `--validate` to fail fast at connect.
+
 ## Build a searchable table and query it
 
 ```

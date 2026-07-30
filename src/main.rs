@@ -39,7 +39,8 @@ const DEFAULT_LOG_FILTER: &str = "warn";
 )]
 struct Cli {
     /// Storage location: `memory://`, `file://<path>`, `s3://<bucket>/<prefix>`,
-    /// or `az://<container>/<prefix>`. May also be set via `INFINO_URI`.
+    /// `az://<container>/<prefix>`, `gs://<bucket>/<prefix>`, or a hosted
+    /// `https://<host>/<database>`. May also be set via `INFINO_URI`.
     #[arg(long, global = true, env = "INFINO_URI")]
     uri: Option<String>,
 
@@ -52,6 +53,16 @@ struct Cli {
     #[arg(long = "storage-option", global = true, value_name = "KEY=VALUE")]
     storage_option: Vec<String>,
 
+    /// API key for a hosted (`https://<host>/<database>`) connection, sent as a
+    /// bearer credential. Ignored by local backends.
+    #[arg(long, global = true, env = "INFINO_API_KEY", hide_env_values = true)]
+    api_key: Option<String>,
+
+    /// Probe the storage backend at connect so bad credentials or an
+    /// unreachable endpoint fail immediately, not on the first query.
+    #[arg(long, global = true)]
+    validate: bool,
+
     /// Output format for row-returning commands.
     #[arg(long, value_enum, global = true, default_value = "table")]
     output: OutputFormat,
@@ -62,6 +73,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Provision the database named in a hosted (`https://<host>/<database>`)
+    /// URI. A no-op for local and object-storage backends, which create their
+    /// catalog lazily on first write.
+    CreateDatabase,
     /// List the tables at a storage location.
     Tables,
     /// Show a table's schema.
@@ -188,8 +203,14 @@ fn main() -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let opts = connect_options(&cli.storage_option)?;
+    let opts = connect_options(&cli.storage_option, cli.api_key.as_deref(), cli.validate)?;
     match cli.command {
+        Command::CreateDatabase => {
+            let conn = open(&opts, &cli.uri)?;
+            conn.create_database()
+                .context("failed to create database")?;
+            println!("database ready");
+        }
         Command::Tables => {
             let conn = open(&opts, &cli.uri)?;
             let names = conn.list_tables().context("failed to list tables")?;
@@ -378,13 +399,23 @@ fn open_table(opts: &ConnectOptions, uri: &Option<String>, table: &str) -> Resul
 /// CLI reads no credentials from the environment; an omitted set uses the
 /// backend's ambient identity (IAM instance role / managed identity / ADC).
 /// An unknown or cross-backend key is rejected by the engine at `connect`.
-fn connect_options(overrides: &[String]) -> Result<ConnectOptions> {
+fn connect_options(
+    overrides: &[String],
+    api_key: Option<&str>,
+    validate: bool,
+) -> Result<ConnectOptions> {
     let mut opts = ConnectOptions::new();
     for kv in overrides {
         let (key, value) = kv
             .split_once('=')
             .with_context(|| format!("--storage-option must be KEY=VALUE, got `{kv}`"))?;
         opts = opts.with_storage_option(key.trim(), value);
+    }
+    if let Some(key) = api_key {
+        opts = opts.with_api_key(key);
+    }
+    if validate {
+        opts = opts.with_validate(true);
     }
     Ok(opts)
 }
@@ -417,29 +448,37 @@ mod tests {
 
     #[test]
     fn no_flags_yields_empty_options() {
-        // With no `--storage-option`, connect uses ambient identity — no
-        // storage options are set. `ConnectOptions` exposes no getter, so
-        // inspect its `Debug` form.
-        let opts = connect_options(&[]).expect("assemble");
+        // With no flags, connect uses ambient identity — no storage options,
+        // no api key. `ConnectOptions` exposes no getter, so inspect `Debug`.
+        let opts = connect_options(&[], None, false).expect("assemble");
+        let dbg = format!("{opts:?}");
         assert!(
-            format!("{opts:?}").contains("storage_options: {}"),
-            "no flags should carry no storage options, got {opts:?}"
+            dbg.contains("storage_options: {}"),
+            "no flags should carry no storage options, got {dbg}"
+        );
+        assert!(
+            dbg.contains("validate: false"),
+            "validate should default off, got {dbg}"
         );
     }
 
     #[test]
     fn storage_option_flag_requires_key_value() {
-        let err = connect_options(&["not-a-pair".to_string()])
+        let err = connect_options(&["not-a-pair".to_string()], None, false)
             .expect_err("malformed --storage-option should error");
         assert!(err.to_string().contains("KEY=VALUE"));
     }
 
     #[test]
     fn storage_option_flags_are_recorded() {
-        let opts = connect_options(&[
-            "aws_endpoint=http://h:9000".to_string(),
-            "aws_region=us-west-1".to_string(),
-        ])
+        let opts = connect_options(
+            &[
+                "aws_endpoint=http://h:9000".to_string(),
+                "aws_region=us-west-1".to_string(),
+            ],
+            None,
+            false,
+        )
         .expect("assemble");
         let dbg = format!("{opts:?}");
         assert!(
@@ -447,6 +486,16 @@ mod tests {
                 && dbg.contains("http://h:9000")
                 && dbg.contains("us-west-1"),
             "flag values should land in storage options, got {dbg}"
+        );
+    }
+
+    #[test]
+    fn api_key_and_validate_are_recorded() {
+        let opts = connect_options(&[], Some("sk-test"), true).expect("assemble");
+        let dbg = format!("{opts:?}");
+        assert!(
+            dbg.contains("sk-test") && dbg.contains("validate: true"),
+            "api key and validate should be set, got {dbg}"
         );
     }
 }
