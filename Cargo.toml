@@ -21,7 +21,8 @@ name = "infino"
 path = "src/main.rs"
 
 [dependencies]
-infino = "0.2"
+# `remote` enables the hosted transport so `--uri https://<host>/<db>` works.
+infino = { version = "0.2", features = ["remote"] }
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

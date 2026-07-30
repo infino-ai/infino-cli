@@ -1,7 +1,7 @@
 ---
 name: infino
-description: Use this skill when the user wants to work with an infino dataset from the terminal — connect to local disk or object storage, then search (BM25 / vector / SQL), inspect, or load data. Start here; see infino-search and infino-data for specifics.
-version: 0.1.0
+description: Use this skill when the user wants to work with an infino dataset from the terminal — connect to local disk, object storage, or the hosted service, then search (BM25 / vector / SQL), inspect, or load data. Start here; see infino-search and infino-data for specifics.
+version: 0.2.0
 ---
 
 # infino CLI
@@ -16,10 +16,39 @@ environment variable):
 
 - `memory://` — ephemeral, in-process
 - `file://<path>` — local disk
-- `s3://<bucket>/<prefix>` — Amazon S3 (or S3-compatible)
+- `s3://<bucket>/<prefix>` — Amazon S3 (or S3-compatible: MinIO, Ceph, RustFS)
 - `az://<container>/<prefix>` — Azure Blob
+- `gs://<bucket>/<prefix>` — Google Cloud Storage
+- `https://<host>/<database>` — Infino hosted service
 
-S3/Azure credentials come from the ambient environment (`AWS_*`, `AZURE_*`).
+Cloud credentials are passed explicitly with `--storage-option KEY=VALUE`
+(repeatable), keyed by object_store's config strings — the same
+`storage_options` map the language bindings take. Nothing is read from `AWS_*` /
+`AZURE_*`; omit them to use ambient cloud identity (IAM role / managed identity).
+
+```
+infino tables --uri s3://bucket \
+  --storage-option aws_access_key_id=... \
+  --storage-option aws_secret_access_key=... \
+  --storage-option aws_region=us-east-1 \
+  --storage-option aws_endpoint=https://minio.internal:9000   # S3-compatible
+```
+
+## Hosted service
+
+For the hosted service, pass an API key with `--api-key` (or the
+`INFINO_API_KEY` env var), and provision the database once with
+`create-database`:
+
+```
+export INFINO_API_KEY=sk-...
+infino create-database --uri https://<host>/<database>
+infino tables --uri https://<host>/<database>
+```
+
+Every other command is identical to a local connection — only the `--uri`
+changes. Add `--validate` to any command to fail fast at connect on bad
+credentials or an unreachable endpoint instead of on the first query.
 
 ## Inspect
 
