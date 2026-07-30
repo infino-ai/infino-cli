@@ -11,6 +11,9 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# Another tool (a published GitHub Release) creates the release; dist only
+# builds and uploads artifacts to it.
+create-release = false
 # The installers to generate for each app
 installers = ["shell", "npm", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)

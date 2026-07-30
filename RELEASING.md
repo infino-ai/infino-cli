@@ -3,18 +3,23 @@
 The CLI lives in its own repo (`infino-ai/infino-cli`) and depends on the
 published `infino` crate. It ships as prebuilt binaries via
 [`dist`](https://github.com/axodotdev/cargo-dist) (cargo-dist): a shell
-installer, a Homebrew formula, and an npm package, released on standard
-`vX.Y.Z` tags.
+installer, a Homebrew formula, and an npm package. A release is started by
+**publishing a GitHub Release** for a `vX.Y.Z` tag; dist then builds the
+binaries and attaches them to that Release (`create-release = false`).
 
 ## One-time setup
 
 1. **Install dist:** `cargo install cargo-dist` (or the shell installer).
 2. **Create the Homebrew tap repo:** `infino-ai/homebrew-tap` (public). `dist`
    pushes the generated formula there → `brew install infino-ai/tap/infino-cli`.
-3. **Generate CI:** run `dist init` at the repo root. It validates
-   `dist-workspace.toml`, pins the dist version, and **generates the release
-   workflow** (`.github/workflows/release.yml`). Commit what it writes — do not
-   hand-edit the generated workflow; re-run `dist init` to change it.
+3. **Generate CI:** run `dist init` (or `dist generate`) at the repo root. It
+   validates `dist-workspace.toml`, pins the dist version, and **generates the
+   release workflow** (`.github/workflows/release.yml`). One deliberate
+   exception to "don't hand-edit": the `on:` trigger block and the
+   `github.event.release.tag_name` references are hand-edited so the workflow
+   fires on a published GitHub Release rather than a tag push (dist has no
+   config for that trigger). After any `dist generate`, re-apply that block —
+   it's flagged with a `HAND-EDITED` comment.
 4. **Secrets** (GitHub repo settings):
    - npm publish token for `@infino-ai` (the npm publish job).
    - A token with **write access to the `homebrew-tap` repo** for the formula
@@ -24,14 +29,17 @@ installer, a Homebrew formula, and an npm package, released on standard
 
 ## Cutting a release
 
-1. Bump `version` in `Cargo.toml`.
-2. Tag and push:
-   ```
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-3. The `dist` workflow builds every target, creates the GitHub Release with
-   checksummed artifacts, and publishes the Homebrew formula + npm package.
+1. Bump `version` in `Cargo.toml` and merge it to `main`.
+2. On GitHub, **Releases → Draft a new release**. Create a new tag `vX.Y.Z`
+   targeting `main`, write the notes, and click **Publish release**.
+3. Publishing fires the workflow: it builds every target, uploads the
+   checksummed artifacts to that Release, and publishes the Homebrew formula +
+   npm package + crates.io.
+
+The Release goes live immediately (before the binaries finish building, which
+takes a while for this crate); the artifacts attach a few minutes later when the
+run completes. Publishing the Release is what creates the tag, so don't create
+the tag separately first.
 
 The CLI versions independently of the engine; bump `infino = "…"` in
 `Cargo.toml` when adopting a newer engine release.
