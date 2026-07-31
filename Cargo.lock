@@ -2256,6 +2256,7 @@ dependencies = [
  "arrow",
  "clap",
  "datafusion",
+ "glob",
  "infino",
  "parquet",
  "serde",

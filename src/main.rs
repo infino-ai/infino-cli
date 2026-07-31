@@ -67,6 +67,12 @@ struct Cli {
     #[arg(long, value_enum, global = true, default_value = "table")]
     output: OutputFormat,
 
+    /// Ingest window size in MiB. Bulk ingest (`create-table` / `ingest`) is
+    /// streamed and committed in chunks of about this size, so peak memory is
+    /// bounded regardless of input size.
+    #[arg(long, global = true, default_value_t = 256)]
+    batch_size_mb: u64,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -107,15 +113,18 @@ enum Command {
     CreateTable {
         /// Table name.
         name: String,
-        /// Parquet file: infers the schema AND loads it as the initial rows.
-        #[arg(long, conflicts_with = "schema")]
-        from_parquet: Option<PathBuf>,
+        /// Parquet input: infers the schema AND loads it as the initial rows.
+        /// Repeatable; each value may be a file, a directory (all `*.parquet`
+        /// inside), or a quoted glob (e.g. `'data/*.parquet'`).
+        #[arg(long, num_args = 1.., conflicts_with = "schema")]
+        from_parquet: Vec<PathBuf>,
         /// YAML schema (a list of `{name, type, nullable?}`); pair with `--file`.
         #[arg(long)]
         schema: Option<PathBuf>,
-        /// Initial rows to load (required with `--schema`; `-`/omitted = stdin).
-        #[arg(long)]
-        file: Option<PathBuf>,
+        /// Initial rows to load (required with `--schema`). Repeatable; `-` or
+        /// omitted reads NDJSON from stdin.
+        #[arg(long, num_args = 1..)]
+        file: Vec<PathBuf>,
         /// Encoding of `--file`.
         #[arg(long, value_enum, default_value = "ndjson")]
         format: Format,
@@ -126,13 +135,15 @@ enum Command {
         #[arg(long, value_name = "COL:DIM:NCENT:METRIC")]
         vector: Vec<String>,
     },
-    /// Append rows from a Parquet file (`--file`) or NDJSON (`--file` / stdin).
+    /// Append rows from Parquet (`--file`) or NDJSON (`--file` / stdin).
     Ingest {
         /// Table name.
         table: String,
-        /// Input file (`-` or omitted = stdin, NDJSON only).
-        #[arg(long)]
-        file: Option<PathBuf>,
+        /// Input. Repeatable; each value may be a file, a directory (all
+        /// `*.parquet` inside), or a quoted glob. `-` or omitted reads NDJSON
+        /// from stdin.
+        #[arg(long, num_args = 1..)]
+        file: Vec<PathBuf>,
         /// Input encoding.
         #[arg(long, value_enum, default_value = "parquet")]
         format: Format,
@@ -266,37 +277,50 @@ fn run(cli: Cli) -> Result<()> {
             vector,
         } => {
             let conn = open(&opts, &cli.uri)?;
-            let (table_schema, initial) = match (from_parquet, schema_path) {
-                (Some(parquet), None) => {
-                    let schema = data::parquet_schema(&parquet)?;
-                    (schema, data::read_parquet(&parquet)?)
+            let window = window_bytes(cli.batch_size_mb);
+            let spec = schema::index_spec(&fts, &vector)?;
+
+            // Stream rows into the new table in windows so a large input never
+            // has to fit in memory. Each window is one append == one commit.
+            let appended: u64 = if !from_parquet.is_empty() {
+                let files = data::resolve_inputs(&from_parquet)?;
+                let table_schema = data::parquet_schema(&files[0])?;
+                let handle = conn
+                    .create_table(&name, table_schema, spec)
+                    .with_context(|| format!("creating table `{name}`"))?;
+                data::stream_parquet(&files, window, |batch| {
+                    handle
+                        .append(batch)
+                        .with_context(|| format!("loading initial rows into `{name}`"))
+                })?
+            } else if let Some(yaml) = schema_path {
+                let table_schema = schema::schema_from_yaml(&yaml)?;
+                let handle = conn
+                    .create_table(&name, table_schema.clone(), spec)
+                    .with_context(|| format!("creating table `{name}`"))?;
+                match format {
+                    Format::Parquet => {
+                        let files = data::resolve_inputs(&file)?;
+                        data::stream_parquet(&files, window, |batch| {
+                            handle
+                                .append(batch)
+                                .with_context(|| format!("loading initial rows into `{name}`"))
+                        })?
+                    }
+                    Format::Ndjson => data::stream_ndjson(&file, table_schema, window, |batch| {
+                        handle
+                            .append(batch)
+                            .with_context(|| format!("loading initial rows into `{name}`"))
+                    })?,
                 }
-                (None, Some(yaml)) => {
-                    let schema = schema::schema_from_yaml(&yaml)?;
-                    let path = file
-                        .as_deref()
-                        .context("--schema needs initial rows; pass --file <data>")?;
-                    let rows = data::read_rows(Some(path), format, schema.clone())?;
-                    (schema, rows)
-                }
-                (None, None) => bail!("provide --from-parquet <file> or --schema <yaml>"),
-                (Some(_), Some(_)) => bail!("--from-parquet and --schema are mutually exclusive"),
+            } else {
+                bail!("provide --from-parquet <input> or --schema <yaml>");
             };
-            if initial.iter().all(|batch| batch.num_rows() == 0) {
+
+            if appended == 0 {
                 bail!("create-table needs at least one row to persist the table");
             }
-            let spec = schema::index_spec(&fts, &vector)?;
-            let handle = conn
-                .create_table(&name, table_schema, spec)
-                .with_context(|| format!("creating table `{name}`"))?;
-            let mut rows = 0;
-            for batch in &initial {
-                rows += batch.num_rows();
-                handle
-                    .append(batch)
-                    .with_context(|| format!("loading initial rows into `{name}`"))?;
-            }
-            println!("created table `{name}` with {rows} rows");
+            println!("created table `{name}` with {appended} rows");
         }
         Command::Ingest {
             table,
@@ -304,15 +328,26 @@ fn run(cli: Cli) -> Result<()> {
             format,
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
-            let batches = data::read_rows(file.as_deref(), format, handle.schema())?;
-            let mut rows = 0;
-            for batch in &batches {
-                rows += batch.num_rows();
-                handle
-                    .append(batch)
-                    .with_context(|| format!("appending to `{table}`"))?;
-            }
-            println!("ingested {rows} rows into `{table}`");
+            let window = window_bytes(cli.batch_size_mb);
+            let appended = match format {
+                Format::Parquet => {
+                    let files = data::resolve_inputs(&file)?;
+                    data::stream_parquet(&files, window, |batch| {
+                        handle
+                            .append(batch)
+                            .with_context(|| format!("appending to `{table}`"))
+                    })?
+                }
+                Format::Ndjson => {
+                    let schema = handle.schema();
+                    data::stream_ndjson(&file, schema, window, |batch| {
+                        handle
+                            .append(batch)
+                            .with_context(|| format!("appending to `{table}`"))
+                    })?
+                }
+            };
+            println!("ingested {appended} rows into `{table}`");
         }
         Command::Update {
             table,
@@ -418,6 +453,12 @@ fn connect_options(
         opts = opts.with_validate(true);
     }
     Ok(opts)
+}
+
+/// Ingest window size in bytes from the `--batch-size-mb` flag (floored at
+/// 1 MiB so `0` can't disable windowing).
+fn window_bytes(mb: u64) -> usize {
+    (mb.max(1) as usize).saturating_mul(1024 * 1024)
 }
 
 /// Print the row counts a mutation reported.
