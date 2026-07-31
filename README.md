@@ -110,7 +110,7 @@ unreachable endpoint, rather than on the first query.
 | Command | What it does |
 |---|---|
 | `create-table` | Create a table and load initial rows (`--from-parquet`, or `--schema` + `--file`; `--fts` / `--vector` indexes) |
-| `ingest` | Append rows from Parquet or NDJSON (file or stdin) |
+| `ingest` | Append rows from Parquet or NDJSON (files, a directory, a glob, or stdin) |
 | `bm25-search` | Ranked keyword (BM25) search |
 | `vector-search` | Vector similarity (kNN) search — bring your own query vector |
 | `hybrid-search` | Hybrid BM25 + vector search, fused with reciprocal-rank fusion |
@@ -126,6 +126,23 @@ unreachable endpoint, rather than on the first query.
 
 Run `infino <command> --help` for full flags. Output format is `--output
 table` (default), `json`, or `csv`.
+
+## Bulk and multi-file ingest
+
+`--from-parquet` and `ingest --file` accept a single file, a **directory** (all
+`*.parquet` inside), a quoted **glob**, or several paths — so a dataset split
+across many Parquet files loads directly, no pre-combining needed:
+
+```sh
+# a whole directory of parquet parts
+infino create-table wiki --from-parquet ./wikipedia/data/ --fts body --uri s3://bucket
+# or a glob
+infino ingest wiki --file './wikipedia/data/*.parquet' --format parquet --uri s3://bucket
+```
+
+Ingest is **streamed and committed in windows** (default 256 MiB, set with
+`--batch-size-mb`), so peak memory is bounded by the window rather than the
+input size — a file far larger than RAM loads fine.
 
 ## Vectors
 

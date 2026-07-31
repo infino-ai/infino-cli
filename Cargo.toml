@@ -35,6 +35,9 @@ datafusion = "54"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+# Expands `--from-parquet`/`--file` glob patterns (directories and shell-quoted
+# globs) for multi-file ingest.
+glob = "0.3"
 
 # The profile that 'dist' will build with
 [profile.dist]
