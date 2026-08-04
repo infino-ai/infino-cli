@@ -22,7 +22,8 @@ infino create-table docs --uri <uri> --schema schema.yaml --file seed.ndjson \
     --fts body --vector embedding:384:256:cosine
 ```
 
-- `--fts <col>` — full-text (BM25) index (the column must be `large_utf8`).
+- `--fts <col>` — full-text (BM25) index. The column must be `large_utf8`;
+  `--from-parquet` widens `utf8` to `large_utf8` automatically.
 - `--vector <col:dim:n_cent:metric>` — vector index; metric is `cosine`,
   `l2sq`, or `negdot`.
 

@@ -284,11 +284,14 @@ fn run(cli: Cli) -> Result<()> {
             // has to fit in memory. Each window is one append == one commit.
             let appended: u64 = if !from_parquet.is_empty() {
                 let files = data::resolve_inputs(&from_parquet)?;
-                let table_schema = data::parquet_schema(&files[0])?;
+                // Widen Parquet's Utf8 to LargeUtf8 so `--fts` works without the
+                // user re-encoding; the table is created with the widened schema
+                // and each window is coerced to match.
+                let table_schema = data::widen_utf8(&data::parquet_schema(&files[0])?);
                 let handle = conn
-                    .create_table(&name, table_schema, spec)
+                    .create_table(&name, table_schema.clone(), spec)
                     .with_context(|| format!("creating table `{name}`"))?;
-                data::stream_parquet(&files, window, |batch| {
+                data::stream_parquet(&files, &table_schema, window, |batch| {
                     handle
                         .append(batch)
                         .with_context(|| format!("loading initial rows into `{name}`"))
@@ -301,7 +304,7 @@ fn run(cli: Cli) -> Result<()> {
                 match format {
                     Format::Parquet => {
                         let files = data::resolve_inputs(&file)?;
-                        data::stream_parquet(&files, window, |batch| {
+                        data::stream_parquet(&files, &table_schema, window, |batch| {
                             handle
                                 .append(batch)
                                 .with_context(|| format!("loading initial rows into `{name}`"))
@@ -329,23 +332,23 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let window = window_bytes(cli.batch_size_mb);
+            let schema = handle.schema();
             let appended = match format {
                 Format::Parquet => {
                     let files = data::resolve_inputs(&file)?;
-                    data::stream_parquet(&files, window, |batch| {
+                    // Coerce Parquet's Utf8 to the existing table's schema (e.g.
+                    // LargeUtf8 for FTS columns) so appends match.
+                    data::stream_parquet(&files, &schema, window, |batch| {
                         handle
                             .append(batch)
                             .with_context(|| format!("appending to `{table}`"))
                     })?
                 }
-                Format::Ndjson => {
-                    let schema = handle.schema();
-                    data::stream_ndjson(&file, schema, window, |batch| {
-                        handle
-                            .append(batch)
-                            .with_context(|| format!("appending to `{table}`"))
-                    })?
-                }
+                Format::Ndjson => data::stream_ndjson(&file, schema, window, |batch| {
+                    handle
+                        .append(batch)
+                        .with_context(|| format!("appending to `{table}`"))
+                })?,
             };
             println!("ingested {appended} rows into `{table}`");
         }

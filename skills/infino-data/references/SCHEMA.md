@@ -20,7 +20,8 @@ creation.
 - Integers: `int8` `int16` `int32` `int64` (`int`); `uint8` `uint16` `uint32` `uint64`
 - Floats: `float32` (`float`), `float64` (`double`)
 - Text: `utf8` (`string`), **`large_utf8`** — full-text (`--fts`) columns must be
-  `large_utf8`
+  `large_utf8` in a YAML `--schema`. With `--from-parquet` the CLI widens `utf8`
+  columns to `large_utf8` automatically, so `--fts` works on ordinary Parquet.
 - `bool` (`boolean`), `date32`
 - Vectors: `fixed_size_list<float32,N>` where `N` is the dimension
 
@@ -33,7 +34,8 @@ loads that file as the initial rows — no YAML needed.
 
 Indexes are declared with flags (they work with either schema source):
 
-- `--fts <column>` — BM25 full-text index (repeatable). Column must be `large_utf8`.
+- `--fts <column>` — BM25 full-text index (repeatable). The column must be
+  `large_utf8`; `--from-parquet` widens `utf8` to `large_utf8` automatically.
 - `--vector <column:dim:n_cent:metric>` — IVF vector index (repeatable).
   - `dim` — vector dimension (match the column's `fixed_size_list` length).
   - `n_cent` — IVF centroid count; size it to the table's scale.

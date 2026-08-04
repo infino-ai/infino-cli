@@ -11,11 +11,14 @@ use std::{
     fs::File,
     io::{BufReader, Read, stdin},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
 use arrow::{
-    array::RecordBatch, compute::concat_batches, datatypes::SchemaRef,
+    array::RecordBatch,
+    compute::{cast, concat_batches},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     json::ReaderBuilder as JsonReaderBuilder,
 };
 use clap::ValueEnum;
@@ -78,32 +81,85 @@ pub fn parquet_schema(path: &Path) -> Result<SchemaRef> {
     Ok(builder.schema().clone())
 }
 
-/// Concatenate a window's batches into one, then hand it to `sink` and clear
-/// the buffer. A single-batch window skips the copy.
-fn flush_window<F>(window: &mut Vec<RecordBatch>, sink: &mut F) -> Result<()>
+/// Replace top-level `Utf8` fields with `LargeUtf8`.
+///
+/// Parquet strings decode to `Utf8`, but the engine's full-text index requires
+/// `LargeUtf8` (the two differ only in offset width, `i32` vs `i64` — the same
+/// strings). Widening the inferred schema lets `--fts` work on ordinary
+/// Parquet without the user re-encoding the file.
+pub fn widen_utf8(schema: &SchemaRef) -> SchemaRef {
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            if f.data_type() == &DataType::Utf8 {
+                Field::new(f.name(), DataType::LargeUtf8, f.is_nullable())
+            } else {
+                f.as_ref().clone()
+            }
+        })
+        .collect();
+    Arc::new(Schema::new(fields))
+}
+
+/// Cast a batch's columns to `target` where they differ only in string offset
+/// width (`Utf8` vs `LargeUtf8`) — the mismatch Parquet introduces against a
+/// `LargeUtf8` table schema. Other columns pass through unchanged, and a
+/// genuine type or column-count mismatch surfaces at `append`.
+fn coerce_string_width(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch> {
+    if batch.schema().as_ref() == target.as_ref() {
+        return Ok(batch.clone());
+    }
+    if batch.num_columns() != target.fields().len() {
+        return Ok(batch.clone());
+    }
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for (i, column) in batch.columns().iter().enumerate() {
+        let want = target.field(i).data_type();
+        let coerced = match (column.data_type(), want) {
+            (DataType::Utf8, DataType::LargeUtf8) | (DataType::LargeUtf8, DataType::Utf8) => {
+                cast(column, want).context("adjusting string column width")?
+            }
+            _ => Arc::clone(column),
+        };
+        columns.push(coerced);
+    }
+    RecordBatch::try_new(target.clone(), columns).context("coercing batch to the table schema")
+}
+
+/// Concatenate a window's batches into one, coerce it to `target` (string
+/// offset width only), then hand it to `sink` and clear the buffer. A
+/// single-batch window skips the concat copy.
+fn flush_window<F>(window: &mut Vec<RecordBatch>, target: &SchemaRef, sink: &mut F) -> Result<()>
 where
     F: FnMut(&RecordBatch) -> Result<()>,
 {
-    match window.len() {
-        0 => Ok(()),
-        1 => {
-            let batch = window.pop().expect("len == 1");
-            sink(&batch)
-        }
+    let batch = match window.len() {
+        0 => return Ok(()),
+        1 => window.pop().expect("len == 1"),
         _ => {
             let schema = window[0].schema();
             let batch = concat_batches(&schema, window.iter()).context("concatenating window")?;
             window.clear();
-            sink(&batch)
+            batch
         }
-    }
+    };
+    let batch = coerce_string_width(&batch, target)?;
+    sink(&batch)
 }
 
 /// Stream record batches from one or more Parquet files, grouping them into
 /// windows of about `window_bytes` (decoded, in-memory size) and calling `sink`
-/// once per window. All files must share one schema. Returns the total rows
-/// streamed. Peak memory is roughly one window, not the whole input.
-pub fn stream_parquet<F>(paths: &[PathBuf], window_bytes: usize, mut sink: F) -> Result<u64>
+/// once per window. All files must share one schema. Each window is coerced to
+/// `target` for string offset width (Parquet's `Utf8` vs the table's
+/// `LargeUtf8`) before `sink`. Returns the total rows streamed. Peak memory is
+/// roughly one window, not the whole input.
+pub fn stream_parquet<F>(
+    paths: &[PathBuf],
+    target: &SchemaRef,
+    window_bytes: usize,
+    mut sink: F,
+) -> Result<u64>
 where
     F: FnMut(&RecordBatch) -> Result<()>,
 {
@@ -136,12 +192,12 @@ where
             window_bytes_acc += batch.get_array_memory_size();
             window.push(batch);
             if window_bytes_acc >= window_bytes {
-                flush_window(&mut window, &mut sink)?;
+                flush_window(&mut window, target, &mut sink)?;
                 window_bytes_acc = 0;
             }
         }
     }
-    flush_window(&mut window, &mut sink)?;
+    flush_window(&mut window, target, &mut sink)?;
     Ok(total_rows)
 }
 
@@ -180,12 +236,12 @@ where
             window_bytes_acc += batch.get_array_memory_size();
             window.push(batch);
             if window_bytes_acc >= window_bytes {
-                flush_window(&mut window, &mut sink)?;
+                flush_window(&mut window, &schema, &mut sink)?;
                 window_bytes_acc = 0;
             }
         }
     }
-    flush_window(&mut window, &mut sink)?;
+    flush_window(&mut window, &schema, &mut sink)?;
     Ok(total_rows)
 }
 
@@ -329,7 +385,7 @@ mod tests {
         // one batch and we see multiple windows.
         let mut windows = 0u32;
         let mut rows = 0u64;
-        let total = stream_parquet(&files, 1, |b| {
+        let total = stream_parquet(&files, &id_body_schema(), 1, |b| {
             windows += 1;
             rows += b.num_rows() as u64;
             Ok(())
@@ -341,6 +397,45 @@ mod tests {
             windows >= 2,
             "tiny window should flush per batch, got {windows}"
         );
+    }
+
+    #[test]
+    fn widen_utf8_promotes_only_utf8_fields() {
+        let widened = widen_utf8(&id_body_schema());
+        assert_eq!(widened.field(0).data_type(), &DataType::Int64, "id kept");
+        assert_eq!(
+            widened.field(1).data_type(),
+            &DataType::LargeUtf8,
+            "body widened"
+        );
+    }
+
+    #[test]
+    fn stream_parquet_coerces_utf8_to_large_utf8_target() {
+        // Parquet stores `body` as Utf8; the table wants LargeUtf8 (as it would
+        // for `--fts body`). Each streamed window must arrive as LargeUtf8.
+        let dir = tmpdir("widen");
+        write_parquet(
+            &dir.join("f.parquet"),
+            id_body_schema(),
+            &(0..10).collect::<Vec<_>>(),
+        );
+        let files = resolve_inputs(&[dir]).expect("resolve");
+        let target = widen_utf8(&id_body_schema());
+
+        let mut seen = 0u32;
+        let total = stream_parquet(&files, &target, 1 << 20, |b| {
+            seen += 1;
+            assert_eq!(
+                b.schema().field(1).data_type(),
+                &DataType::LargeUtf8,
+                "body coerced to LargeUtf8"
+            );
+            Ok(())
+        })
+        .expect("stream");
+        assert_eq!(total, 10);
+        assert!(seen >= 1);
     }
 
     #[test]
@@ -358,7 +453,8 @@ mod tests {
         writer.close().expect("close");
 
         let files = resolve_inputs(&[dir]).expect("resolve");
-        let err = stream_parquet(&files, 1 << 20, |_| Ok(())).expect_err("mismatch");
+        let err =
+            stream_parquet(&files, &id_body_schema(), 1 << 20, |_| Ok(())).expect_err("mismatch");
         assert!(err.to_string().contains("schema"), "got {err}");
     }
 }
