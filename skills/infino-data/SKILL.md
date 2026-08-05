@@ -19,12 +19,13 @@ infino create-table docs <uri> --from-parquet seed.parquet --fts body
 
 # Or a YAML schema plus a data file:
 infino create-table docs --uri <uri> --schema schema.yaml --file seed.ndjson \
-    --fts body --vector embedding:384:256:cosine
+    --fts body --vector embedding:384:cosine
 ```
 
 - `--fts <col>` — full-text (BM25) index (the column must be `large_utf8`).
-- `--vector <col:dim:n_cent:metric>` — vector index; metric is `cosine`,
-  `l2sq`, or `negdot`.
+- `--vector <col:dim:metric>` — vector index; metric is `cosine`,
+  `l2sq`, or `negdot`. IVF centroid count is derived from the data at build
+  time, not declared here.
 
 ## Load more rows
 

@@ -52,7 +52,7 @@ infino vector-search docs embedding --vector-file q.json -k 10 --uri file://./da
 ```
 
 Create the table with a vector index first:
-`--vector embedding:384:256:cosine` (column:dim:n_cent:metric).
+`--vector embedding:384:cosine` (column:dim:metric).
 
 ## Change data
 
