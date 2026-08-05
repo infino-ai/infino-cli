@@ -34,9 +34,9 @@ loads that file as the initial rows — no YAML needed.
 Indexes are declared with flags (they work with either schema source):
 
 - `--fts <column>` — BM25 full-text index (repeatable). Column must be `large_utf8`.
-- `--vector <column:dim:n_cent:metric>` — IVF vector index (repeatable).
+- `--vector <column:dim:metric>` — IVF vector index (repeatable).
   - `dim` — vector dimension (match the column's `fixed_size_list` length).
-  - `n_cent` — IVF centroid count; size it to the table's scale.
   - `metric` — `cosine`, `l2sq` (`l2`), or `negdot` (`dot`).
+  - IVF centroid count is derived from the data at build time, not declared here.
 
-Example: `--vector embedding:384:256:cosine`.
+Example: `--vector embedding:384:cosine`.

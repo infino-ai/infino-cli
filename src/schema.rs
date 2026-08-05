@@ -30,37 +30,30 @@ pub fn schema_from_yaml(path: &Path) -> Result<SchemaRef> {
 }
 
 /// Build an `IndexSpec` from repeated `--fts <col>` and
-/// `--vector <col:dim:n_cent:metric>` flags.
+/// `--vector <col:dim:metric>` flags.
 pub fn index_spec(fts: &[String], vector: &[String]) -> Result<IndexSpec> {
     let mut spec = IndexSpec::new();
     for column in fts {
         spec = spec.fts(column.clone());
     }
     for entry in vector {
-        let (column, dim, n_cent, metric) = parse_vector(entry)?;
-        spec = spec.vector(column, dim, n_cent, metric);
+        let (column, dim, metric) = parse_vector(entry)?;
+        spec = spec.vector(column, dim, metric);
     }
     Ok(spec)
 }
 
-/// Parse `column:dim:n_cent:metric`, e.g. `embedding:384:256:cosine`.
-fn parse_vector(entry: &str) -> Result<(String, usize, usize, Metric)> {
+/// Parse `column:dim:metric`, e.g. `embedding:384:cosine`. The IVF centroid
+/// count is derived from the data at build time, not declared here.
+fn parse_vector(entry: &str) -> Result<(String, usize, Metric)> {
     let parts: Vec<&str> = entry.split(':').collect();
-    if parts.len() != 4 {
-        bail!("--vector must be `column:dim:n_cent:metric`, got {entry:?}");
+    if parts.len() != 3 {
+        bail!("--vector must be `column:dim:metric`, got {entry:?}");
     }
     let dim = parts[1]
         .parse()
         .with_context(|| format!("vector dim in {entry:?}"))?;
-    let n_cent = parts[2]
-        .parse()
-        .with_context(|| format!("vector n_cent in {entry:?}"))?;
-    Ok((
-        parts[0].to_string(),
-        dim,
-        n_cent,
-        metric_from_str(parts[3])?,
-    ))
+    Ok((parts[0].to_string(), dim, metric_from_str(parts[2])?))
 }
 
 fn metric_from_str(s: &str) -> Result<Metric> {

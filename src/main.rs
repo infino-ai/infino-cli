@@ -149,8 +149,9 @@ enum Command {
         /// Mark a column as full-text (BM25) indexed (repeatable).
         #[arg(long)]
         fts: Vec<String>,
-        /// Mark a column as vector indexed (repeatable).
-        #[arg(long, value_name = "COL:DIM:NCENT:METRIC")]
+        /// Mark a column as vector indexed (repeatable). IVF centroid count
+        /// is derived from the data at build time, not declared here.
+        #[arg(long, value_name = "COL:DIM:METRIC")]
         vector: Vec<String>,
     },
     /// Append rows from Parquet (`--file`) or NDJSON (`--file` / stdin).
