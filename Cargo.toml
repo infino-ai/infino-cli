@@ -1,7 +1,7 @@
 # The infino CLI — binary `infino`, a thin shell over the `infino` crate.
 [package]
 name = "infino-cli"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -22,7 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 # `remote` enables the hosted transport so `--uri https://<host>/<db>` works.
-infino = { version = "0.2", features = ["remote"] }
+infino = { version = "0.3.1", features = ["remote"] }
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
