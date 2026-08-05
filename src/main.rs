@@ -73,8 +73,26 @@ struct Cli {
     #[arg(long, global = true, default_value_t = 256)]
     batch_size_mb: u64,
 
+    /// Local disk-cache directory for durable (non-`memory://`) backends.
+    #[arg(long, global = true, env = "INFINO_CACHE_DIR")]
+    cache_dir: Option<PathBuf>,
+
+    /// Disable the local disk cache and hold every read superfile resident
+    /// in memory for the connection's lifetime. Useful for short-lived
+    /// queries against a small dataset; unbounded for large ingests.
+    #[arg(long, global = true)]
+    no_disk_cache: bool,
+
+    /// Disk-cache byte budget in MiB (per table)
+    #[arg(long, global = true)]
+    cache_budget_mb: Option<u64>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+fn default_cache_dir() -> PathBuf {
+    std::env::temp_dir().join("infino-cli-cache")
 }
 
 #[derive(Subcommand)]
@@ -214,7 +232,14 @@ fn main() -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let opts = connect_options(&cli.storage_option, cli.api_key.as_deref(), cli.validate)?;
+    let opts = connect_options(
+        &cli.storage_option,
+        cli.api_key.as_deref(),
+        cli.validate,
+        cli.no_disk_cache,
+        cli.cache_dir.as_deref(),
+        cli.cache_budget_mb,
+    )?;
     match cli.command {
         Command::CreateDatabase => {
             let conn = open(&opts, &cli.uri)?;
@@ -434,10 +459,18 @@ fn open_table(opts: &ConnectOptions, uri: &Option<String>, table: &str) -> Resul
 /// CLI reads no credentials from the environment; an omitted set uses the
 /// backend's ambient identity (IAM instance role / managed identity / ADC).
 /// An unknown or cross-backend key is rejected by the engine at `connect`.
+///
+/// The disk cache defaults **on** (`--no-disk-cache` opts out) so a durable
+/// backend's read superfiles are bounded on local disk instead of held
+/// resident in RAM for the connection's lifetime — `memory://` and hosted
+/// (`https://`) backends ignore the cache dir regardless.
 fn connect_options(
     overrides: &[String],
     api_key: Option<&str>,
     validate: bool,
+    no_disk_cache: bool,
+    cache_dir: Option<&std::path::Path>,
+    cache_budget_mb: Option<u64>,
 ) -> Result<ConnectOptions> {
     let mut opts = ConnectOptions::new();
     for kv in overrides {
@@ -451,6 +484,13 @@ fn connect_options(
     }
     if validate {
         opts = opts.with_validate(true);
+    }
+    if !no_disk_cache {
+        let dir = cache_dir.map_or_else(default_cache_dir, PathBuf::from);
+        opts = opts.with_cache_dir(dir);
+        if let Some(mb) = cache_budget_mb {
+            opts = opts.with_cache_budget_bytes(mb.saturating_mul(1024 * 1024));
+        }
     }
     Ok(opts)
 }
@@ -488,10 +528,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_flags_yields_empty_options() {
+    fn no_flags_yields_empty_options_with_default_cache() {
         // With no flags, connect uses ambient identity — no storage options,
-        // no api key. `ConnectOptions` exposes no getter, so inspect `Debug`.
-        let opts = connect_options(&[], None, false).expect("assemble");
+        // no api key — but the disk cache still defaults on so a durable
+        // backend's reads stay bounded on disk instead of resident in RAM.
+        // `ConnectOptions` exposes no getter, so inspect `Debug`.
+        let opts = connect_options(&[], None, false, false, None, None).expect("assemble");
         let dbg = format!("{opts:?}");
         assert!(
             dbg.contains("storage_options: {}"),
@@ -501,11 +543,40 @@ mod tests {
             dbg.contains("validate: false"),
             "validate should default off, got {dbg}"
         );
+        assert!(
+            dbg.contains("cache_dir: Some"),
+            "disk cache should default on, got {dbg}"
+        );
+    }
+
+    #[test]
+    fn no_disk_cache_flag_disables_the_cache() {
+        let opts = connect_options(&[], None, false, true, None, None).expect("assemble");
+        let dbg = format!("{opts:?}");
+        assert!(
+            dbg.contains("cache_dir: None"),
+            "--no-disk-cache should disable the cache, got {dbg}"
+        );
+    }
+
+    #[test]
+    fn explicit_cache_dir_and_budget_are_recorded() {
+        let dir = std::path::Path::new("/tmp/infino-cache-test");
+        let opts = connect_options(&[], None, false, false, Some(dir), Some(64)).expect("assemble");
+        let dbg = format!("{opts:?}");
+        assert!(
+            dbg.contains("infino-cache-test"),
+            "explicit cache dir should be recorded, got {dbg}"
+        );
+        assert!(
+            dbg.contains("cache_budget_bytes: Some(67108864)"),
+            "cache budget should convert MiB to bytes, got {dbg}"
+        );
     }
 
     #[test]
     fn storage_option_flag_requires_key_value() {
-        let err = connect_options(&["not-a-pair".to_string()], None, false)
+        let err = connect_options(&["not-a-pair".to_string()], None, false, false, None, None)
             .expect_err("malformed --storage-option should error");
         assert!(err.to_string().contains("KEY=VALUE"));
     }
@@ -519,6 +590,9 @@ mod tests {
             ],
             None,
             false,
+            false,
+            None,
+            None,
         )
         .expect("assemble");
         let dbg = format!("{opts:?}");
@@ -532,7 +606,8 @@ mod tests {
 
     #[test]
     fn api_key_and_validate_are_recorded() {
-        let opts = connect_options(&[], Some("sk-test"), true).expect("assemble");
+        let opts =
+            connect_options(&[], Some("sk-test"), true, false, None, None).expect("assemble");
         let dbg = format!("{opts:?}");
         assert!(
             dbg.contains("sk-test") && dbg.contains("validate: true"),
