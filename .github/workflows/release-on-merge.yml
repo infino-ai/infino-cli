@@ -1,0 +1,67 @@
+name: Release on merge
+
+# Second stage of the release train: when a `release-*` PR (opened by the
+# `Release prep` workflow) merges, publish the `vX.Y.Z` GitHub release.
+# release.yml (dist) listens for the published release and builds the
+# binaries, installers, Homebrew formula, and npm package, and publishes
+# crates.io via its publish-crates-io job.
+#
+# Publishing the release is what creates the tag — dist runs with
+# `create-release = false` and expects the tag to appear with the release,
+# so no tag is pushed separately here (see RELEASING.md).
+#
+# The release is created with the org's release-App token: one created with
+# the default GITHUB_TOKEN would not trigger release.yml (workflows can't
+# trigger workflows with the default token).
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read # the release uses the release-App token
+
+jobs:
+  release:
+    name: Publish the GitHub release
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'infino-ai/infino-cli' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release-')
+    timeout-minutes: 5
+    steps:
+      - name: Mint release-App token scoped to infino-cli
+        id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: infino-ai
+          repositories: infino-cli
+
+      # Check out the merge commit itself: its Cargo.toml is the version this
+      # release ships, and the release tag must point exactly at it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.token.outputs.token }}
+
+      # Idempotent: a re-run skips cleanly instead of failing on "release
+      # already exists".
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="v$version"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists — nothing to do"
+            exit 0
+          fi
+          gh release create "$tag" --target "$SHA" \
+            --title "$tag" --generate-notes

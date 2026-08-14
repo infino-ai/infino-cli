@@ -1,0 +1,27 @@
+name: CI
+
+# Build gate for pull requests and main — the check release PRs and
+# dependabot engine bumps must pass before they ship. Release builds stay in
+# release.yml (dist).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Format, lint, and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # The engine's dep graph (datafusion + lance + tantivy) dominates the
+      # build; cache it across runs.
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

@@ -22,18 +22,21 @@ JSON array of numbers, or `-` for stdin.
 
 ```
 infino vector-search <table> <column> --vector-file q.json -k 10 \
-    [--nprobe N] [--rerank-mult M] [--fields a,b] \
+    [--fields a,b] \
     [--filter-column <col> --filter-query "<text>" --filter-mode or|and]
 ```
+
+Probe width and rerank budget are engine-calibrated per table and per `k`;
+there are no tuning flags.
 
 ## Hybrid (BM25 + vector, RRF-fused)
 
 Needs both an FTS column and a vector column. `--mode` applies to the BM25 side;
-`--nprobe` / `--rerank-mult` tune the vector side.
+the vector side is engine-calibrated.
 
 ```
 infino hybrid-search <table> <text_column> "<query>" <vector_column> \
-    --vector-file q.json -k 10 [--mode or|and] [--nprobe N] [--fields a,b]
+    --vector-file q.json -k 10 [--mode or|and] [--fields a,b]
 ```
 
 ## Unranked matches
