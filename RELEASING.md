@@ -29,12 +29,20 @@ binaries and uploads them to that Release (`create-release = false`).
 
 ## Cutting a release
 
-1. Bump `version` in `Cargo.toml` and merge it to `main`.
-2. On GitHub, **Releases → Draft a new release**. Create a new tag `vX.Y.Z`
-   targeting `main`, write the notes, and click **Publish release**.
-3. Publishing fires the workflow: it builds every target, uploads the
-   checksummed artifacts to that Release, and publishes the Homebrew formula +
-   npm package + crates.io.
+Releases are normally cut by the automated train:
+
+1. The `Release prep` workflow (daily cron, or dispatch it from the Actions
+   tab) classifies what changed since the last release, bumps
+   `Cargo.toml`/`Cargo.lock`, and opens a `release: vX.Y.Z` PR showing the
+   classification. Nothing to release → no PR.
+2. Review and merge that PR. `Release on merge` publishes the `vX.Y.Z`
+   GitHub release, which fires the dist workflow: it builds every target,
+   uploads the checksummed artifacts to that Release, and publishes the
+   Homebrew formula + npm package + crates.io.
+
+The manual path still works when needed — bump `version` in `Cargo.toml`,
+merge to `main`, then **Releases → Draft a new release** with a new tag
+`vX.Y.Z` targeting `main` and click **Publish release**.
 
 The Release goes live immediately (before the binaries finish building, which
 takes a while for this crate); the artifacts attach a few minutes later when the

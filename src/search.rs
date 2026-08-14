@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Context, Result};
 use arrow::array::RecordBatch;
 use clap::{Args, ValueEnum};
-use infino::{Bm25SearchOptions, BoolMode, Supertable, VectorFilter, VectorSearchOptions};
+use infino::{Bm25SearchOptions, BoolMode, Supertable, VectorFilter};
 
 /// Default number of results when `-k` is not given.
 const DEFAULT_K: usize = 10;
@@ -52,7 +52,9 @@ pub struct Bm25Args {
     pub fields: Option<Vec<String>>,
 }
 
-/// `vectorSearch(column, query, k, nprobe, rerankMult, projection, filter)`.
+/// `vectorSearch(column, query, k, projection, filter)`. Probe width and
+/// rerank budget are engine-calibrated per table and per `k` — there is no
+/// caller tuning surface.
 #[derive(Args)]
 pub struct VectorArgs {
     /// Table name.
@@ -65,12 +67,6 @@ pub struct VectorArgs {
     /// Number of results.
     #[arg(short = 'k', long, default_value_t = DEFAULT_K)]
     pub k: usize,
-    /// IVF probe count (higher = more recall, slower).
-    #[arg(long)]
-    pub nprobe: Option<usize>,
-    /// Rerank multiplier.
-    #[arg(long)]
-    pub rerank_mult: Option<usize>,
     /// Columns to return, comma-separated (default: id + score).
     #[arg(long, value_delimiter = ',')]
     pub fields: Option<Vec<String>>,
@@ -85,7 +81,8 @@ pub struct VectorArgs {
     pub filter_mode: Mode,
 }
 
-/// `hybridSearch(textColumn, textQuery, vectorColumn, vectorQuery, k, mode, nprobe)`.
+/// `hybridSearch(textColumn, textQuery, vectorColumn, vectorQuery, k, mode)`.
+/// The vector side's probe width and rerank budget are engine-calibrated.
 #[derive(Args)]
 pub struct HybridArgs {
     /// Table name.
@@ -105,12 +102,6 @@ pub struct HybridArgs {
     /// Boolean mode for the BM25 side.
     #[arg(long, value_enum, default_value = "or")]
     pub mode: Mode,
-    /// IVF probe count on the vector side (higher = more recall, slower).
-    #[arg(long)]
-    pub nprobe: Option<usize>,
-    /// Rerank multiplier on the vector side.
-    #[arg(long)]
-    pub rerank_mult: Option<usize>,
     /// Columns to return, comma-separated (default: id + score).
     #[arg(long, value_delimiter = ',')]
     pub fields: Option<Vec<String>>,
@@ -174,13 +165,6 @@ pub fn bm25(table: &Supertable, args: &Bm25Args) -> Result<Vec<RecordBatch>> {
 
 pub fn vector(table: &Supertable, args: &VectorArgs) -> Result<Vec<RecordBatch>> {
     let query = read_vector(&args.vector_file)?;
-    let mut options = VectorSearchOptions::new();
-    if let Some(nprobe) = args.nprobe {
-        options = options.with_nprobe(nprobe);
-    }
-    if let Some(rerank_mult) = args.rerank_mult {
-        options = options.with_rerank_mult(rerank_mult);
-    }
     let filter = match (&args.filter_column, &args.filter_query) {
         (Some(column), Some(query)) => Some(VectorFilter {
             column,
@@ -190,25 +174,11 @@ pub fn vector(table: &Supertable, args: &VectorArgs) -> Result<Vec<RecordBatch>>
         _ => None,
     };
     let fields = projection(&args.fields);
-    Ok(table.vector_search(
-        &args.column,
-        &query,
-        args.k,
-        options,
-        filter,
-        fields.as_deref(),
-    )?)
+    Ok(table.vector_search(&args.column, &query, args.k, filter, fields.as_deref())?)
 }
 
 pub fn hybrid(table: &Supertable, args: &HybridArgs) -> Result<Vec<RecordBatch>> {
     let query = read_vector(&args.vector_file)?;
-    let mut options = VectorSearchOptions::new();
-    if let Some(nprobe) = args.nprobe {
-        options = options.with_nprobe(nprobe);
-    }
-    if let Some(rerank_mult) = args.rerank_mult {
-        options = options.with_rerank_mult(rerank_mult);
-    }
     let fields = projection(&args.fields);
     Ok(table.hybrid_search(
         &args.text_column,
@@ -216,7 +186,6 @@ pub fn hybrid(table: &Supertable, args: &HybridArgs) -> Result<Vec<RecordBatch>>
         args.mode.into(),
         &args.vector_column,
         &query,
-        options,
         args.k,
         fields.as_deref(),
     )?)

@@ -29,8 +29,8 @@
 
 - `--vector-file <path>` — a JSON array of numbers, e.g. `[0.1, -0.2, 0.3]`; `-`
   reads it from stdin. The dimension must match the column's vector dimension.
-- `--nprobe <N>` — IVF probes; higher = more recall, slower.
-- `--rerank-mult <M>` — over-fetch factor before reranking.
+- Probe width and rerank budget are engine-calibrated per table and per `k`;
+  there are no tuning flags.
 - **Pushdown filter** — restrict the kNN candidates to rows matching a keyword
   predicate first: `--filter-column <fts_col> --filter-query "<text>"
   [--filter-mode or|and]`. All three filter flags work together; the filter
@@ -46,8 +46,8 @@ infino hybrid-search docs body "cancel subscription" embedding \
   --vector-file query.json -k 5 --uri file://./data
 ```
 
-`--mode or|and` applies to the BM25 side; `--nprobe` / `--rerank-mult` tune the
-vector side. Both indexes must exist on the table.
+`--mode or|and` applies to the BM25 side; the vector side is
+engine-calibrated. Both indexes must exist on the table.
 
 ## Counting
 
