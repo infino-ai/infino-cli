@@ -1,6 +1,13 @@
 # Keep dependencies current, most importantly the infino engine crate — a new
-# engine release should show up here as a PR that has to pass CI, not as
-# silent drift.
+# engine release should show up here as a PR that has to pass CI, not as silent
+# drift.
+#
+# Dependabot has no priority setting, and a full queue means it simply opens no
+# more PRs — so the dependency that matters most here can be the one left out
+# (it has happened: a full queue of routine updates starved two engine
+# releases). The fix is to keep the queue from filling: every dependency except
+# the engine rides in one grouped PR, occupying a single slot however many are
+# pending, while `infino` matches no group and so always gets its own.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -8,8 +15,31 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 5
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "infino"
+    ignore:
+      # arrow and parquet are not independently updatable here, by
+      # construction: this CLI hands back the engine's own RecordBatch and
+      # SchemaRef, and those types only unify at a matching major (the reason
+      # for the pin comment on both lines in Cargo.toml). The engine requires
+      # arrow ^58 as of 0.5.6, so an arrow 59 PR can only ever be red. Their
+      # majors move inside the engine's own bump, where CI can prove the types
+      # still unify, which is why only the major is ignored here: patches and
+      # minors within the engine's major still come through normally.
+      - dependency-name: arrow
+        update-types: ["version-update:semver-major"]
+      - dependency-name: parquet
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
