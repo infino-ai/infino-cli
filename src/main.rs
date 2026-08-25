@@ -5,7 +5,6 @@
 //! query commands render Arrow rows.
 
 mod data;
-mod nested;
 mod output;
 mod predicate;
 mod schema;
@@ -311,27 +310,13 @@ fn run(cli: Cli) -> Result<()> {
             // has to fit in memory. Each window is one append == one commit.
             let appended: u64 = if !from_parquet.is_empty() {
                 let files = data::resolve_inputs(&from_parquet)?;
-                let src_schema = data::parquet_schema(&files[0])?;
-                // Hosted shim: encode columns the hosted wire can't carry
-                // (structs, lists-of-structs, timestamps, ...) as JSON text.
-                let (table_schema, convert) = if nested::is_hosted(cli.uri.as_deref()) {
-                    nested::jsonify_schema(&src_schema)
-                } else {
-                    (src_schema, Vec::new())
-                };
-                if !convert.is_empty() {
-                    eprintln!(
-                        "note: storing {} nested column(s) as JSON text (the hosted service does not accept nested types yet)",
-                        convert.len()
-                    );
-                }
+                let table_schema = data::parquet_schema(&files[0])?;
                 let handle = conn
-                    .create_table(&name, table_schema.clone(), spec)
+                    .create_table(&name, table_schema, spec)
                     .with_context(|| format!("creating table `{name}`"))?;
                 data::stream_parquet(&files, window, |batch| {
-                    let batch = nested::jsonify_batch(batch, &convert, &table_schema)?;
                     handle
-                        .append(&batch)
+                        .append(batch)
                         .with_context(|| format!("loading initial rows into `{name}`"))
                 })?
             } else if let Some(yaml) = schema_path {
@@ -373,18 +358,9 @@ fn run(cli: Cli) -> Result<()> {
             let appended = match format {
                 Format::Parquet => {
                     let files = data::resolve_inputs(&file)?;
-                    // Hosted shim: the table's nested columns are stored as JSON
-                    // text, so encode incoming Parquet the same way to match.
-                    let target = handle.schema();
-                    let convert = if nested::is_hosted(cli.uri.as_deref()) {
-                        nested::jsonify_schema(&data::parquet_schema(&files[0])?).1
-                    } else {
-                        Vec::new()
-                    };
                     data::stream_parquet(&files, window, |batch| {
-                        let batch = nested::jsonify_batch(batch, &convert, &target)?;
                         handle
-                            .append(&batch)
+                            .append(batch)
                             .with_context(|| format!("appending to `{table}`"))
                     })?
                 }
