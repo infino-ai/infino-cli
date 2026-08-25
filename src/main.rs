@@ -72,7 +72,7 @@ struct Cli {
     /// bounded regardless of input size. Against a hosted (`https://`) target
     /// the window is capped at 100 MiB, which is what the service accepts in
     /// one request; a larger value is reduced rather than rejected.
-    #[arg(long, global = true, default_value_t = 256)]
+    #[arg(long, global = true, default_value_t = DEFAULT_BATCH_MB)]
     batch_size_mb: u64,
 
     /// Local disk-cache directory for durable (non-`memory://`) backends.
@@ -498,6 +498,12 @@ fn connect_options(
     Ok(opts)
 }
 
+/// Default ingest window, in MiB. A memory bound rather than a wire limit:
+/// bulk ingest streams and commits in windows of about this size, so peak
+/// memory does not scale with the input. Local and object-storage targets have
+/// no request to exceed, so this applies unreduced there.
+const DEFAULT_BATCH_MB: u64 = 256;
+
 /// Largest ingest window used against a hosted target, in MiB.
 ///
 /// The service caps one request body at 128 MiB, and rows are re-encoded before
@@ -548,10 +554,6 @@ fn print_gc(report: &GcReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The `--batch-size-mb` default. A hosted load must not exceed the
-    /// service's request cap on flags the user never set.
-    const DEFAULT_BATCH_MB: u64 = 256;
 
     const MIB: usize = 1024 * 1024;
 
