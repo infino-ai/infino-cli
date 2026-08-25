@@ -5,7 +5,6 @@
 //! query commands render Arrow rows.
 
 mod data;
-mod nested;
 mod output;
 mod predicate;
 mod schema;
@@ -70,8 +69,10 @@ struct Cli {
 
     /// Ingest window size in MiB. Bulk ingest (`create-table` / `ingest`) is
     /// streamed and committed in chunks of about this size, so peak memory is
-    /// bounded regardless of input size.
-    #[arg(long, global = true, default_value_t = 256)]
+    /// bounded regardless of input size. Against a hosted (`https://`) target
+    /// the window is capped at 100 MiB, which is what the service accepts in
+    /// one request; a larger value is reduced rather than rejected.
+    #[arg(long, global = true, default_value_t = DEFAULT_BATCH_MB)]
     batch_size_mb: u64,
 
     /// Local disk-cache directory for durable (non-`memory://`) backends.
@@ -304,34 +305,20 @@ fn run(cli: Cli) -> Result<()> {
             vector,
         } => {
             let conn = open(&opts, &cli.uri)?;
-            let window = window_bytes(cli.batch_size_mb);
+            let window = window_bytes(cli.batch_size_mb, cli.uri.as_deref());
             let spec = schema::index_spec(&fts, &vector)?;
 
             // Stream rows into the new table in windows so a large input never
             // has to fit in memory. Each window is one append == one commit.
             let appended: u64 = if !from_parquet.is_empty() {
                 let files = data::resolve_inputs(&from_parquet)?;
-                let src_schema = data::parquet_schema(&files[0])?;
-                // Hosted shim: encode columns the hosted wire can't carry
-                // (structs, lists-of-structs, timestamps, ...) as JSON text.
-                let (table_schema, convert) = if nested::is_hosted(cli.uri.as_deref()) {
-                    nested::jsonify_schema(&src_schema)
-                } else {
-                    (src_schema, Vec::new())
-                };
-                if !convert.is_empty() {
-                    eprintln!(
-                        "note: storing {} nested column(s) as JSON text (the hosted service does not accept nested types yet)",
-                        convert.len()
-                    );
-                }
+                let table_schema = data::parquet_schema(&files[0])?;
                 let handle = conn
-                    .create_table(&name, table_schema.clone(), spec)
+                    .create_table(&name, table_schema, spec)
                     .with_context(|| format!("creating table `{name}`"))?;
                 data::stream_parquet(&files, window, |batch| {
-                    let batch = nested::jsonify_batch(batch, &convert, &table_schema)?;
                     handle
-                        .append(&batch)
+                        .append(batch)
                         .with_context(|| format!("loading initial rows into `{name}`"))
                 })?
             } else if let Some(yaml) = schema_path {
@@ -369,22 +356,13 @@ fn run(cli: Cli) -> Result<()> {
             format,
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
-            let window = window_bytes(cli.batch_size_mb);
+            let window = window_bytes(cli.batch_size_mb, cli.uri.as_deref());
             let appended = match format {
                 Format::Parquet => {
                     let files = data::resolve_inputs(&file)?;
-                    // Hosted shim: the table's nested columns are stored as JSON
-                    // text, so encode incoming Parquet the same way to match.
-                    let target = handle.schema();
-                    let convert = if nested::is_hosted(cli.uri.as_deref()) {
-                        nested::jsonify_schema(&data::parquet_schema(&files[0])?).1
-                    } else {
-                        Vec::new()
-                    };
                     data::stream_parquet(&files, window, |batch| {
-                        let batch = nested::jsonify_batch(batch, &convert, &target)?;
                         handle
-                            .append(&batch)
+                            .append(batch)
                             .with_context(|| format!("appending to `{table}`"))
                     })?
                 }
@@ -520,10 +498,35 @@ fn connect_options(
     Ok(opts)
 }
 
+/// Default ingest window, in MiB. A memory bound rather than a wire limit:
+/// bulk ingest streams and commits in windows of about this size, so peak
+/// memory does not scale with the input. Local and object-storage targets have
+/// no request to exceed, so this applies unreduced there.
+const DEFAULT_BATCH_MB: u64 = 256;
+
+/// Largest ingest window used against a hosted target, in MiB.
+///
+/// The service caps one request body at 128 MiB, and rows are re-encoded before
+/// they are sent, so the bytes on the wire exceed the window measured here. 100
+/// keeps that margin: a default-sized local window (256) would otherwise be
+/// rejected with a 413 the moment the target is hosted, which is a confusing
+/// failure for a flag the user never set.
+const HOSTED_MAX_BATCH_MB: u64 = 100;
+
 /// Ingest window size in bytes from the `--batch-size-mb` flag (floored at
 /// 1 MiB so `0` can't disable windowing).
-fn window_bytes(mb: u64) -> usize {
+fn window_bytes(mb: u64, uri: Option<&str>) -> usize {
+    let mb = if is_hosted(uri) {
+        mb.min(HOSTED_MAX_BATCH_MB)
+    } else {
+        mb
+    };
     (mb.max(1) as usize).saturating_mul(1024 * 1024)
+}
+
+/// Whether `uri` names the hosted service rather than local or object storage.
+fn is_hosted(uri: Option<&str>) -> bool {
+    uri.is_some_and(|u| u.starts_with("https://") || u.starts_with("http://"))
 }
 
 /// Print the row counts a mutation reported.
@@ -551,6 +554,49 @@ fn print_gc(report: &GcReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MIB: usize = 1024 * 1024;
+
+    #[test]
+    fn hosted_window_is_capped_at_the_service_limit() {
+        let window = window_bytes(DEFAULT_BATCH_MB, Some("https://api.example/db"));
+        assert_eq!(window, HOSTED_MAX_BATCH_MB as usize * MIB);
+        assert!(
+            window < DEFAULT_BATCH_MB as usize * MIB,
+            "the default must be reduced for a hosted target"
+        );
+    }
+
+    #[test]
+    fn hosted_window_below_the_cap_is_left_alone() {
+        assert_eq!(window_bytes(16, Some("https://api.example/db")), 16 * MIB);
+    }
+
+    #[test]
+    fn local_window_is_not_capped() {
+        for uri in [Some("s3://bucket/prefix"), Some("./data"), None] {
+            assert_eq!(
+                window_bytes(DEFAULT_BATCH_MB, uri),
+                DEFAULT_BATCH_MB as usize * MIB,
+                "a local target has no request to cap: {uri:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_is_floored_to_one_mib() {
+        assert_eq!(window_bytes(0, None), MIB);
+        assert_eq!(window_bytes(0, Some("https://api.example/db")), MIB);
+    }
+
+    #[test]
+    fn is_hosted_only_for_http_uris() {
+        assert!(is_hosted(Some("https://api.example/db")));
+        assert!(is_hosted(Some("http://localhost:8080/db")));
+        assert!(!is_hosted(Some("s3://bucket/prefix")));
+        assert!(!is_hosted(Some("./data")));
+        assert!(!is_hosted(None));
+    }
 
     #[test]
     fn no_flags_yields_empty_options_with_default_cache() {
