@@ -1,6 +1,6 @@
 ---
 name: infino-data
-description: Use this skill when the user wants to create an infino table or change its data from the terminal — create-table, ingest, update, delete, optimize, gc. Covers schema definition, indexes, and row loading.
+description: Use this skill when the user wants to create an infino table or change its data from the terminal — table create, row insert, row update, row delete, table optimize, table gc. Covers schema definition, indexes, and row loading.
 version: 0.1.0
 ---
 
@@ -10,15 +10,15 @@ All commands take `--uri` (or `INFINO_URI`).
 
 ## Create a table (and seed it)
 
-A table is durable only after its first commit, so `create-table` loads initial
+A table is durable only after its first commit, so `table create` loads initial
 rows too:
 
 ```
 # Schema + data from one Parquet file:
-infino create-table docs <uri> --from-parquet seed.parquet --fts body
+infino table create docs <uri> --from-parquet seed.parquet --fts body
 
 # Or a YAML schema plus a data file:
-infino create-table docs --uri <uri> --schema schema.yaml --file seed.ndjson \
+infino table create docs --uri <uri> --schema schema.yaml --file seed.ndjson \
     --fts body --vector embedding:384:cosine
 ```
 
@@ -30,15 +30,15 @@ infino create-table docs --uri <uri> --schema schema.yaml --file seed.ndjson \
 ## Load more rows
 
 ```
-infino ingest docs --uri <uri> --file data.parquet                 # parquet
-cat rows.ndjson | infino ingest docs --uri <uri> --format ndjson   # ndjson via stdin
+infino row insert docs --uri <uri> --file data.parquet                 # parquet
+cat rows.ndjson | infino row insert docs --uri <uri> --format ndjson   # ndjson via stdin
 ```
 
 ## Change rows
 
 ```
-infino update docs --where "id = 42" --set-file new.ndjson --uri <uri>
-infino delete docs --where "ts < '2026-01-01'" --uri <uri>
+infino row update docs --where "id = 42" --set-file new.ndjson --uri <uri>
+infino row delete docs --where "ts < '2026-01-01'" --uri <uri>
 ```
 
 `--where` is a SQL predicate resolved against the table schema. `update` replaces
@@ -47,7 +47,7 @@ matched rows with the values in `--set-file` (Parquet or NDJSON).
 ## Compact
 
 ```
-infino optimize docs --uri <uri> [--max-memory-mb N] [--min-fill-percent P] \
+infino table optimize docs --uri <uri> [--max-memory-mb N] [--min-fill-percent P] \
     [--target-superfile-size-mb S]
 ```
 
@@ -58,7 +58,7 @@ durable storage. `--older-than-secs` is a safety window (default `0`) so a
 concurrent reader or writer is never raced.
 
 ```
-infino gc docs --uri <uri> [--older-than-secs N]
+infino table gc docs --uri <uri> [--older-than-secs N]
 ```
 
 See [references/SCHEMA.md](references/SCHEMA.md) for the YAML schema format and
