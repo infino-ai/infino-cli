@@ -156,6 +156,18 @@ enum Command {
         #[arg(long, value_name = "COL:DIM:METRIC")]
         vector: Vec<String>,
     },
+    /// Remove a table and reclaim its storage.
+    ///
+    /// Note this removes the whole table. To delete *rows* from a table, use
+    /// `delete --where`.
+    DropTable {
+        /// Table name.
+        table: String,
+        /// Unregister the table from the catalog but leave its bytes on
+        /// storage. The default reclaims them.
+        #[arg(long)]
+        keep_storage: bool,
+    },
     /// Append rows from Parquet (`--file`) or NDJSON (`--file` / stdin).
     Ingest {
         /// Table name.
@@ -399,6 +411,26 @@ fn run(cli: Cli) -> Result<()> {
                 .delete(expr)
                 .with_context(|| format!("deleting from `{table}`"))?;
             print_stats(&stats);
+        }
+        Command::DropTable {
+            table,
+            keep_storage,
+        } => {
+            let conn = open(&opts, &cli.uri)?;
+            // The engine's drop is idempotent, so a mistyped name would other-
+            // wise report success for a table that never existed. On a command
+            // whose whole purpose is removing things, that reads as "done".
+            let existing = conn.list_tables().context("listing tables")?;
+            if !existing.iter().any(|t| t == &table) {
+                bail!("no table `{table}` at this location");
+            }
+            conn.drop_table(&table, !keep_storage)
+                .with_context(|| format!("dropping table `{table}`"))?;
+            if keep_storage {
+                println!("dropped table `{table}` (storage kept)");
+            } else {
+                println!("dropped table `{table}`");
+            }
         }
         Command::Gc {
             table,
