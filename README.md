@@ -33,10 +33,10 @@ environment variable): `memory://`, `file://<path>`, `s3://<bucket>/<prefix>`,
 
 ```sh
 # Create a table and load its first rows (schema from YAML, body full-text indexed)
-infino create-table docs --uri file://./data --schema schema.yaml --fts body --file seed.ndjson
+infino table create docs --uri file://./data --schema schema.yaml --fts body --file seed.ndjson
 
 # Add more rows
-infino ingest docs --uri file://./data --file more.ndjson --format ndjson
+infino row insert docs --uri file://./data --file more.ndjson --format ndjson
 
 # Search
 infino bm25-search docs body "object storage" -k 10 --uri file://./data
@@ -69,7 +69,7 @@ A custom `aws_endpoint` automatically switches to path-style addressing, which
 is what most S3-compatible servers expect.
 
 ```sh
-infino tables --uri s3://my-bucket \
+infino table ls --uri s3://my-bucket \
   --storage-option aws_access_key_id=... \
   --storage-option aws_secret_access_key=... \
   --storage-option aws_region=us-east-1 \
@@ -85,7 +85,7 @@ To see the underlying storage requests when a connection misbehaves, set
 `RUST_LOG`:
 
 ```sh
-RUST_LOG=debug,object_store=trace infino tables --uri s3://my-bucket
+RUST_LOG=debug,object_store=trace infino table ls --uri s3://my-bucket
 ```
 
 ## Hosted service
@@ -93,12 +93,12 @@ RUST_LOG=debug,object_store=trace infino tables --uri s3://my-bucket
 Connect to the Infino hosted service with an `https://<host>/<database>` URI and
 an API key (`--api-key`, or the `INFINO_API_KEY` environment variable). Every
 command works exactly as it does locally; only the `--uri` changes. Provision
-the database once with `create-database`:
+the database once with `database create`:
 
 ```sh
 export INFINO_API_KEY=sk-...
-infino create-database --uri https://<host>/<database>
-infino ingest docs --uri https://<host>/<database> --file rows.ndjson --format ndjson
+infino database create --uri https://<host>/<database>
+infino row insert docs --uri https://<host>/<database> --file rows.ndjson --format ndjson
 infino bm25-search docs body "object storage" -k 10 --uri https://<host>/<database>
 ```
 
@@ -109,19 +109,20 @@ unreachable endpoint, rather than on the first query.
 
 | Command | What it does |
 |---|---|
-| `create-table` | Create a table and load initial rows (`--from-parquet`, or `--schema` + `--file`; `--fts` / `--vector` indexes) |
-| `ingest` | Append rows from Parquet or NDJSON (files, a directory, a glob, or stdin) |
+| `table create` | Create a table and load initial rows (`--from-parquet`, or `--schema` + `--file`; `--fts` / `--vector` indexes) |
+| `row insert` | Append rows from Parquet or NDJSON (files, a directory, a glob, or stdin) |
 | `bm25-search` | Ranked keyword (BM25) search |
 | `vector-search` | Vector similarity (kNN) search — bring your own query vector |
 | `hybrid-search` | Hybrid BM25 + vector search, fused with reciprocal-rank fusion |
 | `token-match` / `exact-match` | Unranked token / exact-value match |
 | `count` | Count rows matching a keyword query, without fetching them |
 | `query` | Run SQL (incl. the `bm25_search()` / `vector_search()` table functions) |
-| `tables` / `describe` | List tables / show a table's schema |
-| `create-database` | Provision a hosted database (no-op for local / object-storage backends) |
-| `update` / `delete` | Change rows matching a `--where` SQL predicate |
-| `optimize` | Compact a table |
-| `gc` | Reclaim orphaned storage objects (maintenance; requires durable storage) |
+| `table ls` / `table describe` | List tables / show a table's schema |
+| `table rm` | Remove a table and reclaim its storage (`--keep-storage` to leave the bytes) |
+| `database create` | Provision a hosted database (no-op for local / object-storage backends) |
+| `row update` / `row delete` | Change or remove rows matching a `--where` SQL predicate |
+| `table optimize` | Compact a table |
+| `table gc` | Reclaim orphaned storage objects (maintenance; requires durable storage) |
 | `skills install` | Install the bundled agent skills for Claude Code / Cursor |
 
 Run `infino <command> --help` for full flags. Output format is `--output
@@ -135,9 +136,9 @@ across many Parquet files loads directly, no pre-combining needed:
 
 ```sh
 # a whole directory of parquet parts
-infino create-table wiki --from-parquet ./wikipedia/data/ --fts body --uri s3://bucket
+infino table create wiki --from-parquet ./wikipedia/data/ --fts body --uri s3://bucket
 # or a glob
-infino ingest wiki --file './wikipedia/data/*.parquet' --format parquet --uri s3://bucket
+infino row insert wiki --file './wikipedia/data/*.parquet' --format parquet --uri s3://bucket
 ```
 
 Ingest is **streamed and committed in windows** (default 256 MiB, set with

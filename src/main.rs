@@ -14,7 +14,7 @@ mod skills;
 use std::{io::stderr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use infino::{
     CompactionSettings, ConnectOptions, Connection, GcReport, MutationStats, OptimizeOptions,
     Supertable, connect_with,
@@ -99,16 +99,20 @@ fn default_cache_dir() -> PathBuf {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Provision the database named in a hosted (`https://<host>/<database>`)
-    /// URI. A no-op for local and object-storage backends, which create their
-    /// catalog lazily on first write.
-    CreateDatabase,
-    /// List the tables at a storage location.
-    Tables,
-    /// Show a table's schema.
-    Describe {
-        /// Table name.
-        table: String,
+    /// Tables: list, create, remove, inspect, and maintain.
+    Table {
+        #[command(subcommand)]
+        command: TableCommand,
+    },
+    /// Rows within an existing table.
+    Row {
+        #[command(subcommand)]
+        command: RowCommand,
+    },
+    /// Databases.
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
     },
     /// Run a SQL query and print the resulting rows.
     Query {
@@ -127,10 +131,52 @@ enum Command {
     ExactMatch(ExactMatchArgs),
     /// Count rows matching a keyword query, without fetching them.
     Count(CountArgs),
+    /// Install or check the bundled agent skills (Claude Code / Cursor).
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
+
+    // Pre-0.6 flat names. Kept so an old invocation names its replacement
+    // instead of falling out as an unrecognised subcommand.
+    #[command(hide = true)]
+    Tables(Renamed),
+    #[command(hide = true)]
+    CreateTable(Renamed),
+    #[command(hide = true)]
+    DropTable(Renamed),
+    #[command(hide = true)]
+    Describe(Renamed),
+    #[command(hide = true)]
+    Ingest(Renamed),
+    #[command(hide = true)]
+    Update(Renamed),
+    #[command(hide = true)]
+    Delete(Renamed),
+    #[command(hide = true)]
+    Gc(Renamed),
+    #[command(hide = true)]
+    Optimize(Renamed),
+    #[command(hide = true)]
+    CreateDatabase(Renamed),
+}
+
+/// Swallows whatever followed a renamed command so the error can name the
+/// replacement rather than complain about the arguments.
+#[derive(Args)]
+struct Renamed {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    rest: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum TableCommand {
+    /// List the tables at a storage location.
+    Ls,
     /// Create a table and load its initial rows (a table is not durable until
     /// its first commit). Schema + data come from a Parquet file
     /// (`--from-parquet`), or from a YAML schema (`--schema`) plus `--file`.
-    CreateTable {
+    Create {
         /// Table name.
         name: String,
         /// Parquet input: infers the schema AND loads it as the initial rows.
@@ -156,8 +202,53 @@ enum Command {
         #[arg(long, value_name = "COL:DIM:METRIC")]
         vector: Vec<String>,
     },
+    /// Remove a table and reclaim its storage.
+    ///
+    /// Note this removes the whole table. To delete *rows* from a table, use
+    /// `delete --where`.
+    Rm {
+        /// Table name.
+        table: String,
+        /// Unregister the table from the catalog but leave its bytes on
+        /// storage. The default reclaims them.
+        #[arg(long)]
+        keep_storage: bool,
+    },
+    /// Show a table's schema.
+    Describe {
+        /// Table name.
+        table: String,
+    },
+    /// Compact a table.
+    Optimize {
+        /// Table name.
+        table: String,
+        /// Build-time memory budget, in MB.
+        #[arg(long)]
+        max_memory_mb: Option<u64>,
+        /// Only compact superfiles below this fill percent (0–100).
+        #[arg(long)]
+        min_fill_percent: Option<u8>,
+        /// Target merged-superfile size, in MB.
+        #[arg(long)]
+        target_superfile_size_mb: Option<u64>,
+    },
+    /// Reclaim orphaned storage objects left by compaction or interrupted
+    /// writes. Requires durable storage.
+    Gc {
+        /// Table name.
+        table: String,
+        /// Only delete objects older than this many seconds — a safety window
+        /// against racing readers or writers.
+        #[arg(long, default_value_t = 0.0)]
+        older_than_secs: f64,
+    },
+}
+
+#[derive(Subcommand)]
+enum RowCommand {
     /// Append rows from Parquet (`--file`) or NDJSON (`--file` / stdin).
-    Ingest {
+    Insert {
         /// Table name.
         table: String,
         /// Input. Repeatable; each value may be a file, a directory (all
@@ -191,35 +282,14 @@ enum Command {
         #[arg(long = "where", value_name = "PREDICATE")]
         predicate: String,
     },
-    /// Reclaim orphaned storage objects left by compaction or interrupted
-    /// writes. Requires durable storage.
-    Gc {
-        /// Table name.
-        table: String,
-        /// Only delete objects older than this many seconds — a safety window
-        /// against racing readers or writers.
-        #[arg(long, default_value_t = 0.0)]
-        older_than_secs: f64,
-    },
-    /// Compact a table.
-    Optimize {
-        /// Table name.
-        table: String,
-        /// Build-time memory budget, in MB.
-        #[arg(long)]
-        max_memory_mb: Option<u64>,
-        /// Only compact superfiles below this fill percent (0–100).
-        #[arg(long)]
-        min_fill_percent: Option<u8>,
-        /// Target merged-superfile size, in MB.
-        #[arg(long)]
-        target_superfile_size_mb: Option<u64>,
-    },
-    /// Install or check the bundled agent skills (Claude Code / Cursor).
-    Skills {
-        #[command(subcommand)]
-        command: SkillsCommand,
-    },
+}
+
+#[derive(Subcommand)]
+enum DatabaseCommand {
+    /// Provision the database named in a hosted (`https://<host>/<database>`)
+    /// URI. A no-op for local and object-storage backends, which create their
+    /// catalog lazily on first write.
+    Create,
 }
 
 fn main() -> Result<()> {
@@ -244,13 +314,17 @@ fn run(cli: Cli) -> Result<()> {
         cli.cache_budget_mb,
     )?;
     match cli.command {
-        Command::CreateDatabase => {
+        Command::Database {
+            command: DatabaseCommand::Create,
+        } => {
             let conn = open(&opts, &cli.uri)?;
             conn.create_database()
                 .context("failed to create database")?;
             println!("database ready");
         }
-        Command::Tables => {
+        Command::Table {
+            command: TableCommand::Ls,
+        } => {
             let conn = open(&opts, &cli.uri)?;
             let names = conn.list_tables().context("failed to list tables")?;
             if names.is_empty() {
@@ -260,7 +334,9 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{name}");
             }
         }
-        Command::Describe { table } => {
+        Command::Table {
+            command: TableCommand::Describe { table },
+        } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             for field in handle.schema().fields() {
                 println!("{}\t{}", field.name(), field.data_type());
@@ -295,14 +371,17 @@ fn run(cli: Cli) -> Result<()> {
             let table = open_table(&opts, &cli.uri, &args.table)?;
             println!("{}", search::count(&table, &args)?);
         }
-        Command::CreateTable {
-            name,
-            from_parquet,
-            schema: schema_path,
-            file,
-            format,
-            fts,
-            vector,
+        Command::Table {
+            command:
+                TableCommand::Create {
+                    name,
+                    from_parquet,
+                    schema: schema_path,
+                    file,
+                    format,
+                    fts,
+                    vector,
+                },
         } => {
             let conn = open(&opts, &cli.uri)?;
             let window = window_bytes(cli.batch_size_mb, cli.uri.as_deref());
@@ -350,10 +429,13 @@ fn run(cli: Cli) -> Result<()> {
             }
             println!("created table `{name}` with {appended} rows");
         }
-        Command::Ingest {
-            table,
-            file,
-            format,
+        Command::Row {
+            command:
+                RowCommand::Insert {
+                    table,
+                    file,
+                    format,
+                },
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let window = window_bytes(cli.batch_size_mb, cli.uri.as_deref());
@@ -377,11 +459,14 @@ fn run(cli: Cli) -> Result<()> {
             };
             println!("ingested {appended} rows into `{table}`");
         }
-        Command::Update {
-            table,
-            predicate,
-            set_file,
-            set_format,
+        Command::Row {
+            command:
+                RowCommand::Update {
+                    table,
+                    predicate,
+                    set_file,
+                    set_format,
+                },
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let expr = predicate::parse(&handle, &predicate)?;
@@ -392,7 +477,9 @@ fn run(cli: Cli) -> Result<()> {
                 .with_context(|| format!("updating `{table}`"))?;
             print_stats(&stats);
         }
-        Command::Delete { table, predicate } => {
+        Command::Row {
+            command: RowCommand::Delete { table, predicate },
+        } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let expr = predicate::parse(&handle, &predicate)?;
             let stats = handle
@@ -400,9 +487,35 @@ fn run(cli: Cli) -> Result<()> {
                 .with_context(|| format!("deleting from `{table}`"))?;
             print_stats(&stats);
         }
-        Command::Gc {
-            table,
-            older_than_secs,
+        Command::Table {
+            command:
+                TableCommand::Rm {
+                    table,
+                    keep_storage,
+                },
+        } => {
+            let conn = open(&opts, &cli.uri)?;
+            // The engine's drop is idempotent, so a mistyped name would other-
+            // wise report success for a table that never existed. On a command
+            // whose whole purpose is removing things, that reads as "done".
+            let existing = conn.list_tables().context("listing tables")?;
+            if !existing.iter().any(|t| t == &table) {
+                bail!("no table `{table}` at this location");
+            }
+            conn.drop_table(&table, !keep_storage)
+                .with_context(|| format!("dropping table `{table}`"))?;
+            if keep_storage {
+                println!("dropped table `{table}` (storage kept)");
+            } else {
+                println!("dropped table `{table}`");
+            }
+        }
+        Command::Table {
+            command:
+                TableCommand::Gc {
+                    table,
+                    older_than_secs,
+                },
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let report = handle
@@ -410,11 +523,14 @@ fn run(cli: Cli) -> Result<()> {
                 .with_context(|| format!("gc on `{table}`"))?;
             print_gc(&report);
         }
-        Command::Optimize {
-            table,
-            max_memory_mb,
-            min_fill_percent,
-            target_superfile_size_mb,
+        Command::Table {
+            command:
+                TableCommand::Optimize {
+                    table,
+                    max_memory_mb,
+                    min_fill_percent,
+                    target_superfile_size_mb,
+                },
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let mut settings = CompactionSettings::default();
@@ -433,6 +549,16 @@ fn run(cli: Cli) -> Result<()> {
             println!("optimized `{table}`");
         }
         Command::Skills { command } => skills::run(&command)?,
+        Command::Tables(_) => bail!(renamed("tables", "table ls")),
+        Command::CreateTable(_) => bail!(renamed("create-table", "table create")),
+        Command::DropTable(_) => bail!(renamed("drop-table", "table rm")),
+        Command::Describe(_) => bail!(renamed("describe", "table describe")),
+        Command::Ingest(_) => bail!(renamed("ingest", "row insert")),
+        Command::Update(_) => bail!(renamed("update", "row update")),
+        Command::Delete(_) => bail!(renamed("delete", "row delete")),
+        Command::Gc(_) => bail!(renamed("gc", "table gc")),
+        Command::Optimize(_) => bail!(renamed("optimize", "table optimize")),
+        Command::CreateDatabase(_) => bail!(renamed("create-database", "database create")),
     }
     Ok(())
 }
@@ -527,6 +653,13 @@ fn window_bytes(mb: u64, uri: Option<&str>) -> usize {
 /// Whether `uri` names the hosted service rather than local or object storage.
 fn is_hosted(uri: Option<&str>) -> bool {
     uri.is_some_and(|u| u.starts_with("https://") || u.starts_with("http://"))
+}
+
+/// Message for a command that moved under a noun. Naming the replacement is the
+/// whole point: the old name still parses, so the user gets an instruction
+/// rather than a list of everything the tool can do.
+fn renamed(old: &str, new: &str) -> String {
+    format!("`{old}` is now `{new}` (run `infino {new} --help`)")
 }
 
 /// Print the row counts a mutation reported.

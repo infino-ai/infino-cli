@@ -27,7 +27,7 @@ Cloud credentials are passed explicitly with `--storage-option KEY=VALUE`
 `AZURE_*`; omit them to use ambient cloud identity (IAM role / managed identity).
 
 ```
-infino tables --uri s3://bucket \
+infino table ls --uri s3://bucket \
   --storage-option aws_access_key_id=... \
   --storage-option aws_secret_access_key=... \
   --storage-option aws_region=us-east-1 \
@@ -38,12 +38,12 @@ infino tables --uri s3://bucket \
 
 For the hosted service, pass an API key with `--api-key` (or the
 `INFINO_API_KEY` env var), and provision the database once with
-`create-database`:
+`database create`:
 
 ```
 export INFINO_API_KEY=sk-...
-infino create-database --uri https://<host>/<database>
-infino tables --uri https://<host>/<database>
+infino database create --uri https://<host>/<database>
+infino table ls --uri https://<host>/<database>
 ```
 
 Every other command is identical to a local connection — only the `--uri`
@@ -53,8 +53,8 @@ credentials or an unreachable endpoint instead of on the first query.
 ## Inspect
 
 ```
-infino tables --uri <uri>
-infino describe <table> --uri <uri>
+infino table ls --uri <uri>
+infino table describe <table> --uri <uri>
 ```
 
 ## Output
@@ -67,7 +67,7 @@ or `csv`. Applies to every row-returning command.
 - **Searching** a table (BM25, vector, token, exact, SQL) → use the
   `infino-search` skill. See [references/WORKFLOWS.md](references/WORKFLOWS.md)
   for end-to-end flows.
-- **Creating tables and loading/changing data** (create-table, ingest, update,
+- **Creating tables and loading/changing data** (table create, row insert, row update,
   delete, optimize) → use the `infino-data` skill.
 
 ## Installing these skills

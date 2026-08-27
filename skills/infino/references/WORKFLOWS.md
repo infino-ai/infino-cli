@@ -9,8 +9,8 @@ unchanged against it. Provision the database once, then use it:
 
 ```
 export INFINO_API_KEY=sk-...
-infino create-database --uri https://<host>/<database>
-infino tables         --uri https://<host>/<database>
+infino database create --uri https://<host>/<database>
+infino table ls         --uri https://<host>/<database>
 ```
 
 `--api-key <key>` is an alternative to the `INFINO_API_KEY` env var. Object
@@ -22,11 +22,11 @@ object_store config keys). Add `--validate` to fail fast at connect.
 
 ```
 # 1. Create + seed (a table is durable only after its first commit).
-infino create-table docs --uri file://./data \
+infino table create docs --uri file://./data \
     --schema schema.yaml --fts body --file seed.ndjson
 
 # 2. Append more rows later.
-infino ingest docs --uri file://./data --file more.ndjson --format ndjson
+infino row insert docs --uri file://./data --file more.ndjson --format ndjson
 
 # 3. Search.
 infino bm25-search docs body "object storage" -k 10 --uri file://./data
@@ -57,7 +57,7 @@ Create the table with a vector index first:
 ## Change data
 
 ```
-infino update docs --where "id = 42" --set-file new.ndjson --uri file://./data
-infino delete docs --where "ts < '2026-01-01'" --uri file://./data
-infino optimize docs --uri file://./data
+infino row update docs --where "id = 42" --set-file new.ndjson --uri file://./data
+infino row delete docs --where "ts < '2026-01-01'" --uri file://./data
+infino table optimize docs --uri file://./data
 ```
