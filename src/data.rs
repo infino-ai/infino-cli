@@ -15,7 +15,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use arrow::{
-    array::RecordBatch, compute::concat_batches, datatypes::SchemaRef,
+    array::{RecordBatch, UInt32Array},
+    compute::{concat_batches, take},
+    datatypes::SchemaRef,
     json::ReaderBuilder as JsonReaderBuilder,
 };
 use clap::ValueEnum;
@@ -80,6 +82,21 @@ pub fn parquet_schema(path: &Path) -> Result<SchemaRef> {
 
 /// Concatenate a window's batches into one, then hand it to `sink` and clear
 /// the buffer. A single-batch window skips the copy.
+/// Copy a batch into buffers of its own.
+///
+/// A slice is a view over its parent's buffers, so anything measuring capacity
+/// downstream sees the parent. `concat_batches` will not do it: with a single
+/// input it returns that input unchanged. Taking every row forces the copy.
+fn compact(batch: &RecordBatch) -> Result<RecordBatch> {
+    let indices = UInt32Array::from_iter_values(0..batch.num_rows() as u32);
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|c| take(c.as_ref(), &indices, None).context("copying a split window"))
+        .collect::<Result<Vec<_>>>()?;
+    RecordBatch::try_new(batch.schema(), columns).context("rebuilding a split window")
+}
+
 fn flush_window<F>(window: &mut Vec<RecordBatch>, sink: &mut F) -> Result<()>
 where
     F: FnMut(&RecordBatch) -> Result<()>,
@@ -88,7 +105,16 @@ where
         0 => Ok(()),
         1 => {
             let batch = window.pop().expect("len == 1");
-            sink(&batch)
+            // A slice shares its parent's buffers, so everything downstream --
+            // the engine's memory accounting locally, the IPC writer on the way
+            // to a hosted table -- would see the whole parent instead of these
+            // rows. Compact it. An unsliced batch passes through untouched, so
+            // the copy is only paid where a split actually happened.
+            if batch_bytes(&batch) < batch.get_array_memory_size() {
+                sink(&compact(&batch)?)
+            } else {
+                sink(&batch)
+            }
         }
         _ => {
             let schema = window[0].schema();
@@ -103,51 +129,59 @@ where
 /// windows of about `window_bytes` (decoded, in-memory size) and calling `sink`
 /// once per window. All files must share one schema. Returns the total rows
 /// streamed. Peak memory is roughly one window, not the whole input.
-/// Fraction of the window a single decoded batch is sized to fill, leaving room
-/// for the row-width estimate to be a little low.
-const BATCH_WINDOW_DIVISOR: usize = 2;
+/// Rows decoded per batch. A fixed count is fine because the window is enforced
+/// by splitting what comes back, not by predicting it: this only bounds how much
+/// the parquet reader materialises at once.
+const READER_BATCH_ROWS: usize = 8_192;
 
-/// Rows per decoded batch when a file's width cannot be measured (no rows).
-/// Matches the parquet reader's own default.
-const FALLBACK_BATCH_ROWS: usize = 1024;
-
-/// Rows decoded while measuring row width, before the real batch size is known.
-const PROBE_BATCH_ROWS: usize = 256;
-
-/// Ceiling on rows per decoded batch. Narrow rows would otherwise produce one
-/// enormous batch: the byte bound would still hold, but the row count would be
-/// unreasonable to materialise in a single Arrow allocation.
-const MAX_BATCH_ROWS: usize = 1_000_000;
-
-/// Rows to decode per batch so that one batch stays inside `window_bytes`.
+/// Bytes a batch occupies, counting only the rows it spans.
 ///
-/// The reader's default is a fixed row count, which says nothing about how wide
-/// a row is: 1024 rows of a few bytes is trivial, 1024 rows carrying kilobytes
-/// of text each is hundreds of megabytes. Without sizing from actual width, a
-/// window smaller than one decoded batch cannot be honoured at all.
-///
-/// Width is measured by decoding one small batch rather than read from parquet's
-/// own byte counts, because those describe the *encoded* form. A
-/// dictionary-encoded column of repeated values occupies almost nothing on disk
-/// and materialises to full width per row in Arrow, so metadata can understate
-/// the decoded size by orders of magnitude.
-fn rows_per_batch(path: &Path, window_bytes: usize) -> Result<usize> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut probe = ParquetRecordBatchReaderBuilder::try_new(file)
-        .with_context(|| format!("reading parquet {}", path.display()))?
-        .with_batch_size(PROBE_BATCH_ROWS)
-        .build()
-        .with_context(|| format!("opening parquet reader for {}", path.display()))?;
+/// `get_array_memory_size` reports whole buffer capacity, so a slice reports its
+/// parent and looks far larger than it is. Every size decision here is made on
+/// slices, so it has to be the slice-aware measure.
+fn batch_bytes(batch: &RecordBatch) -> usize {
+    batch
+        .columns()
+        .iter()
+        .map(|c| {
+            c.to_data()
+                .get_slice_memory_size()
+                .unwrap_or_else(|_| c.get_array_memory_size())
+        })
+        .sum()
+}
 
-    let Some(batch) = probe.next().transpose()? else {
-        return Ok(FALLBACK_BATCH_ROWS);
-    };
-    if batch.num_rows() == 0 {
-        return Ok(FALLBACK_BATCH_ROWS);
+/// Split `batch` into consecutive pieces that each fit `window_bytes`.
+///
+/// Row width is taken from the batch itself rather than sampled from the front
+/// of the file. Document corpora are heavily skewed -- a run of stubs followed
+/// by full articles -- so a sample of the first rows can understate the real
+/// width by orders of magnitude, and any batch size derived from it is wrong for
+/// the rest of the file. Each piece is measured, and halved while it still does
+/// not fit, so the bound holds even when rows vary inside one batch.
+fn split_to_window(batch: &RecordBatch, window_bytes: usize) -> Vec<RecordBatch> {
+    let rows = batch.num_rows();
+    if rows == 0 {
+        return Vec::new();
     }
-    let per_row = (batch.get_array_memory_size() / batch.num_rows()).max(1);
-    let target = window_bytes / BATCH_WINDOW_DIVISOR;
-    Ok((target / per_row).clamp(1, MAX_BATCH_ROWS))
+    if batch_bytes(batch) <= window_bytes {
+        return vec![batch.clone()];
+    }
+
+    let per_row = (batch_bytes(batch) / rows).max(1);
+    let mut pieces = Vec::new();
+    let mut offset = 0;
+    while offset < rows {
+        let mut take = (window_bytes / per_row).clamp(1, rows - offset);
+        let mut piece = batch.slice(offset, take);
+        while take > 1 && batch_bytes(&piece) > window_bytes {
+            take /= 2;
+            piece = batch.slice(offset, take);
+        }
+        offset += take;
+        pieces.push(piece);
+    }
+    pieces
 }
 
 pub fn stream_parquet<F>(paths: &[PathBuf], window_bytes: usize, mut sink: F) -> Result<u64>
@@ -161,10 +195,9 @@ where
 
     for path in paths {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let batch_rows = rows_per_batch(path, window_bytes)?;
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)
             .with_context(|| format!("reading parquet {}", path.display()))?
-            .with_batch_size(batch_rows)
+            .with_batch_size(READER_BATCH_ROWS)
             .build()
             .with_context(|| format!("opening parquet reader for {}", path.display()))?;
         for batch in reader {
@@ -182,15 +215,17 @@ where
                 continue;
             }
             total_rows += batch.num_rows() as u64;
-            // Flush before adding this batch would cross the window, not after.
-            // Adding first overshoots by a whole batch every time.
-            let size = batch.get_array_memory_size();
-            if !window.is_empty() && window_bytes_acc + size > window_bytes {
-                flush_window(&mut window, &mut sink)?;
-                window_bytes_acc = 0;
+            for piece in split_to_window(&batch, window_bytes) {
+                // Flush before adding this piece would cross the window, not
+                // after. Adding first overshoots by a whole piece every time.
+                let size = batch_bytes(&piece);
+                if !window.is_empty() && window_bytes_acc + size > window_bytes {
+                    flush_window(&mut window, &mut sink)?;
+                    window_bytes_acc = 0;
+                }
+                window_bytes_acc += size;
+                window.push(piece);
             }
-            window_bytes_acc += size;
-            window.push(batch);
         }
     }
     flush_window(&mut window, &mut sink)?;
@@ -398,6 +433,59 @@ mod tests {
             appends > 1,
             "a {ROWS}-row file of 8 KiB rows must be split across windows, got {appends} append(s)"
         );
+    }
+
+    /// Leading narrow rows followed by wide ones: a document corpus of stubs and
+    /// full articles. Any batch size sampled from the front of the file is far
+    /// too large for the rest, which is how a 100 MiB window produced a
+    /// multi-gigabyte append.
+    fn write_skewed_rows(path: &Path, stubs: usize, wide: usize) {
+        const WIDE_BYTES: usize = 128 * 1024;
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "body",
+            DataType::LargeUtf8,
+            false,
+        )]));
+        let wide_body = "w".repeat(WIDE_BYTES);
+        let mut rows: Vec<&str> = vec!["stub"; stubs];
+        rows.extend(std::iter::repeat_n(wide_body.as_str(), wide));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(LargeStringArray::from(rows))])
+                .expect("batch");
+        let file = File::create(path).expect("create parquet");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("writer");
+        writer.write(&batch).expect("write");
+        writer.close().expect("close");
+    }
+
+    #[test]
+    fn no_window_exceeds_the_requested_size_on_skewed_rows() {
+        const WINDOW: usize = 4 * 1024 * 1024;
+        const STUBS: usize = 600;
+        const WIDE: usize = 400;
+
+        let dir = tmpdir("window-bound-skew");
+        let path = dir.join("skew.parquet");
+        write_skewed_rows(&path, STUBS, WIDE);
+
+        let mut oversized = Vec::new();
+        let mut appends = 0usize;
+        let total = stream_parquet(&[path], WINDOW, |batch| {
+            appends += 1;
+            let size = batch.get_array_memory_size();
+            if size > WINDOW {
+                oversized.push((batch.num_rows(), size));
+            }
+            Ok(())
+        })
+        .expect("stream");
+
+        assert_eq!(total, (STUBS + WIDE) as u64, "every row must be streamed");
+        assert!(
+            oversized.is_empty(),
+            "no append may exceed the {WINDOW} B window, got (rows, bytes) {oversized:?}"
+        );
+        assert!(appends > 1, "wide rows must be split across windows");
     }
 
     #[test]
