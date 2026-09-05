@@ -2195,9 +2195,9 @@ dependencies = [
 
 [[package]]
 name = "infino"
-version = "0.5.8"
+version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be165ebf090accc16770214ed2542b75b859a3788c98bb2be22569ee42cdb1a4"
+checksum = "0f04b5215c194fd293e238739fef7ece6848641d83599f6e2a6bdae8f12d9118"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -2233,6 +2233,7 @@ dependencies = [
  "rayon",
  "roaring",
  "rustc-hash",
+ "rustix",
  "serde",
  "serde_json",
  "static_assertions",
