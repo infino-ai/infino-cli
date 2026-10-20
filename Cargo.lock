@@ -1708,12 +1708,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fst"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
-
-[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2195,9 +2189,9 @@ dependencies = [
 
 [[package]]
 name = "infino"
-version = "0.7.0"
+version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd178d62f46cc0d27b19f90c657f262bbda6eb3ea3241baaabf1845fb3eb2644"
+checksum = "0734c04586eb92c1c42cbc2b60d49b23c8379976a700e3e5497ec1732a33e022"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -2218,7 +2212,6 @@ dependencies = [
  "ferroid",
  "figment",
  "fs4",
- "fst",
  "futures",
  "hashbrown 0.17.1",
  "libmimalloc-sys",
@@ -2232,6 +2225,7 @@ dependencies = [
  "rand_distr",
  "rayon",
  "roaring",
+ "rust-stemmers",
  "rustc-hash",
  "rustix",
  "serde",
@@ -2241,6 +2235,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unicode-properties",
  "unicode-segmentation",
  "ureq",
  "uuid",
@@ -3277,6 +3272,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-stemmers"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e46a2036019fdb888131db7a4c847a1063a7493f971ed94ea82c67eada63ca54"
+dependencies = [
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4034,6 +4039,12 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-properties"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
 name = "unicode-segmentation"
