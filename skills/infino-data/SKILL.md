@@ -47,7 +47,7 @@ matched rows with the values in `--set-file` (Parquet or NDJSON).
 ## Compact
 
 ```
-infino table optimize docs --uri <uri> [--max-memory-mb N] [--min-fill-percent P] \
+infino table optimize docs --uri <uri> [--max-merge-input-mb N] [--min-fill-percent P] \
     [--target-superfile-size-mb S]
 ```
 
