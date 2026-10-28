@@ -223,9 +223,11 @@ enum TableCommand {
     Optimize {
         /// Table name.
         table: String,
-        /// Build-time memory budget, in MB.
-        #[arg(long)]
-        max_memory_mb: Option<u64>,
+        /// Cap on the raw input bytes one merge packs, in MB. Not a bound on
+        /// the merge's memory. `--max-memory-mb` is the old name and still
+        /// works.
+        #[arg(long, alias = "max-memory-mb")]
+        max_merge_input_mb: Option<u64>,
         /// Only compact superfiles below this fill percent (0–100).
         #[arg(long)]
         min_fill_percent: Option<u8>,
@@ -527,15 +529,15 @@ fn run(cli: Cli) -> Result<()> {
             command:
                 TableCommand::Optimize {
                     table,
-                    max_memory_mb,
+                    max_merge_input_mb,
                     min_fill_percent,
                     target_superfile_size_mb,
                 },
         } => {
             let handle = open_table(&opts, &cli.uri, &table)?;
             let mut settings = CompactionSettings::default();
-            if let Some(value) = max_memory_mb {
-                settings.max_memory_mb = value;
+            if let Some(value) = max_merge_input_mb {
+                settings.max_merge_input_mb = value;
             }
             if let Some(value) = min_fill_percent {
                 settings.min_fill_percent = value;
