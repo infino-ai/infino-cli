@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 arrow = { version = "58", features = ["prettyprint", "json", "csv"] }
 parquet = { version = "58", features = ["arrow"] }
 # Matches the engine's datafusion so the `Expr` type unifies with update/delete.
-datafusion = "54"
+datafusion = "55"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
