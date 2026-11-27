@@ -67,6 +67,12 @@ struct Cli {
     #[arg(long, value_enum, global = true, default_value = "table")]
     output: OutputFormat,
 
+    /// With `--output json`, write a string value that holds a JSON object or
+    /// array as that object or array instead of an escaped string, at every
+    /// depth, so the output pipes straight into `jq`.
+    #[arg(long, global = true)]
+    expand_json: bool,
+
     /// Ingest window size in MiB. Bulk ingest (`create-table` / `ingest`) is
     /// streamed and committed in chunks of about this size, so peak memory is
     /// bounded regardless of input size. Against a hosted (`https://`) target
@@ -307,6 +313,9 @@ fn main() -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if cli.expand_json && cli.output != OutputFormat::Json {
+        bail!("--expand-json applies to --output json only");
+    }
     let opts = connect_options(
         &cli.storage_option,
         cli.api_key.as_deref(),
@@ -347,27 +356,35 @@ fn run(cli: Cli) -> Result<()> {
         Command::Query { sql } => {
             let conn = open(&opts, &cli.uri)?;
             let batches = conn.query_sql(&sql).context("query failed")?;
-            render(cli.output, &batches)?;
+            render(cli.output, cli.expand_json, &batches)?;
         }
         Command::Bm25Search(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
-            render(cli.output, &search::bm25(&table, &args)?)?;
+            render(cli.output, cli.expand_json, &search::bm25(&table, &args)?)?;
         }
         Command::VectorSearch(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
-            render(cli.output, &search::vector(&table, &args)?)?;
+            render(cli.output, cli.expand_json, &search::vector(&table, &args)?)?;
         }
         Command::HybridSearch(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
-            render(cli.output, &search::hybrid(&table, &args)?)?;
+            render(cli.output, cli.expand_json, &search::hybrid(&table, &args)?)?;
         }
         Command::TokenMatch(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
-            render(cli.output, &search::token_match(&table, &args)?)?;
+            render(
+                cli.output,
+                cli.expand_json,
+                &search::token_match(&table, &args)?,
+            )?;
         }
         Command::ExactMatch(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
-            render(cli.output, &search::exact_match(&table, &args)?)?;
+            render(
+                cli.output,
+                cli.expand_json,
+                &search::exact_match(&table, &args)?,
+            )?;
         }
         Command::Count(args) => {
             let table = open_table(&opts, &cli.uri, &args.table)?;
