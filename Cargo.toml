@@ -33,7 +33,9 @@ parquet = { version = "58", features = ["arrow"] }
 # Matches the engine's datafusion so the `Expr` type unifies with update/delete.
 datafusion = "54"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value` lets `--expand-json` pass a row's non-string columns through as
+# the exact text Arrow wrote; re-parsing them would round a 128-bit `_id`.
+serde_json = { version = "1", features = ["raw_value"] }
 serde_yaml = "0.9"
 # Expands `--from-parquet`/`--file` glob patterns (directories and shell-quoted
 # globs) for multi-file ingest.

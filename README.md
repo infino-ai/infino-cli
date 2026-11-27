@@ -128,6 +128,14 @@ unreachable endpoint, rather than on the first query.
 Run `infino <command> --help` for full flags. Output format is `--output
 table` (default), `json`, or `csv`.
 
+A string column that holds a JSON document comes out of `--output json` as an
+escaped string. Add `--expand-json` to write it as nested JSON instead, at every
+depth, so it pipes straight into `jq`:
+
+```bash
+infino query "SELECT resource FROM logs LIMIT 1" --output json --expand-json | jq .resource
+```
+
 ## Bulk and multi-file ingest
 
 `--from-parquet` and `ingest --file` accept a single file, a **directory** (all
